@@ -1,0 +1,2 @@
+apps_baseline: p99_us=40.2, crit_iops=184778.7, bg_mbps=1220.6, peak_temp=67.4
+apps_guard: p99_us=37.6, crit_iops=175479.4, bg_mbps=1077.9, peak_temp=64.9

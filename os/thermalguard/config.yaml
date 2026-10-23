@@ -1,0 +1,14 @@
+device: "7:9"                    # MAJ:MIN of the loop test disk
+cgroup_root: /sys/fs/cgroup/tg
+critical: critical
+background: background
+interval: 1.0
+thresholds: {warn: 60, hot: 70, hysteresis: 3}
+limits: {warn: 0.8, hot: 0.3}    # fraction of full_speed_mbps allowed for background writes
+full_speed_mbps: 1100
+sensor:
+  simulate: true                 # false = try real NVMe sensor first
+  hwmon_glob: "/sys/class/nvme/nvme0/hwmon*/temp1_input"
+  ambient: 30
+  full_load_temp: 85             # equilibrium temp if writing at full speed
+  cooling: 0.03                  # cooling rate per second

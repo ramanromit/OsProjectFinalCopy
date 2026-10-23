@@ -1,0 +1,13 @@
+; Background, throughput-oriented: large sequential writes, like a backup or file sync
+[global]
+ioengine=libaio
+direct=1
+time_based=1
+runtime=${RUNTIME}
+filename=${TG_FILE}
+
+[bulk_copy]
+rw=write
+bs=1M
+iodepth=8
+size=400M

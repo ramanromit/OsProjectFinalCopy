@@ -1,0 +1,13 @@
+; Critical, latency-sensitive: small random reads, like loading game assets on demand
+[global]
+ioengine=libaio
+direct=1
+time_based=1
+runtime=${RUNTIME}
+filename=${TG_FILE}
+
+[game_assets]
+rw=randread
+bs=16k
+iodepth=4
+size=256M

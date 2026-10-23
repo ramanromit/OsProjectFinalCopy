@@ -1,0 +1,2 @@
+baseline: p99_us=43.3, crit_iops=146468.6, bg_mbps=2969.4, peak_temp=94.8
+guard: p99_us=34.6, crit_iops=132392.2, bg_mbps=1908.4, peak_temp=70.1
