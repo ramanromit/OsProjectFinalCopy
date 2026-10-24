@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ThermalGuard - Process Classification Animation</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    @keyframes pulseGlow {
+      0%, 100% { transform: scale(1); opacity: 0.9; }
+      50% { transform: scale(1.05); opacity: 1; }
+    }
+    @keyframes scanLine {
+      0% { top: 0%; opacity: 0.2; }
+      50% { opacity: 0.8; }
+      100% { top: 100%; opacity: 0.2; }
+    }
+    .scanner-active {
+      position: relative;
+      overflow: hidden;
+    }
+    .scanner-active::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, transparent, #38bdf8, transparent);
+      box-shadow: 0 0 10px #38bdf8;
+      animation: scanLine 1.5s infinite linear;
+    }
+    .flow-line {
+      stroke-dasharray: 6;
+      animation: dashMove 1s linear infinite;
+    }
+    @keyframes dashMove {
+      to { stroke-dashoffset: -12; }
+    }
+  </style>
+</head>
+<body class="p-6 bg-[var(--background)] text-[var(--foreground)] min-h-screen">
+  <div class="max-w-5xl mx-auto space-y-6">
+
+    <!-- Header Section -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--border)] pb-4">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-emerald-500 animate-ping"></span>
+          <h1 class="text-xl font-bold tracking-tight">ThermalGuard Classification Engine</h1>
+        </div>
+        <p class="text-sm text-[var(--muted-foreground)] mt-1">
+          Visual simulation of process ingestion, Layer 1 Rule Matching, Layer 2 Heuristic Inspection, and Cgroup migration.
+        </p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btnAutoRun" class="px-3.5 py-1.5 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-semibold hover:opacity-90 transition">
+          ▶ Auto-Cycle Demo
+        </button>
+        <button id="btnReset" class="px-3.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] text-xs font-semibold hover:bg-[var(--accent)] transition">
+          ↺ Reset
+        </button>
+      </div>
+    </header>
+
+    <!-- Preset Process Picker -->
+    <section class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+      <div class="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-3">
+        Select Incoming Process to Ingest:
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5" id="presetButtons">
+        <!-- Dynamically filled with buttons -->
+      </div>
+    </section>
+
+    <!-- Main Stage Pipeline Diagram -->
+    <section class="relative bg-[var(--card)] border border-[var(--border)] rounded-2xl p-6 min-h-[460px] flex flex-col justify-between shadow-lg overflow-hidden">
+
+      <!-- Pipeline Status Ribbon -->
+      <div class="flex items-center justify-between text-xs border-b border-[var(--border)] pb-3 text-[var(--muted-foreground)]">
+        <span class="flex items-center gap-1.5 font-medium">
+          Status: <strong id="stageStatusText" class="text-sky-400">Ready for incoming process</strong>
+        </span>
+        <span id="stepCounter" class="bg-[var(--accent)] px-2.5 py-1 rounded text-xs font-mono">Step 0/4</span>
+      </div>
+
+      <!-- Visual Pipeline Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 my-6 items-stretch relative">
+
+        <!-- Stage 1: Ingestion (/proc scan) -->
+        <div id="boxIngest" class="flex flex-col p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] transition-all duration-300 relative">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-sky-400 tracking-wide">STAGE 1</span>
+            <span class="text-[12px] text-[var(--muted-foreground)]">/proc/[pid]</span>
+          </div>
+          <div class="text-sm font-semibold mb-1">Process Ingestion</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed mb-3">
+            Scanner detects active process with open fd on test disk (<code class="bg-[var(--accent)] px-1 py-0.5 rounded text-[12px]">7:9</code>).
+          </p>
+
+          <div id="cardProc" class="mt-auto p-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--card)] transition-all">
+            <div class="text-xs text-[var(--muted-foreground)] italic">Awaiting process...</div>
+          </div>
+        </div>
+
+        <!-- Stage 2: Layer 1 Rule Matcher -->
+        <div id="boxLayer1" class="flex flex-col p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] transition-all duration-300 relative">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-amber-400 tracking-wide">STAGE 2</span>
+            <span class="text-[12px] text-[var(--muted-foreground)]">Rule Engine</span>
+          </div>
+          <div class="text-sm font-semibold mb-1">Layer 1: Rules</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed mb-3">
+            Matches <code class="text-[12px]">comm</code> &amp; <code class="text-[12px]">cmdline</code> against <code class="text-[12px]">config.yaml</code> regex patterns.
+          </p>
+
+          <div id="cardLayer1Result" class="mt-auto p-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] text-xs">
+            <div class="text-[var(--muted-foreground)] italic">Idle</div>
+          </div>
+        </div>
+
+        <!-- Stage 3: Layer 2 Heuristic Inspector -->
+        <div id="boxLayer2" class="flex flex-col p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] transition-all duration-300 relative">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-purple-400 tracking-wide">STAGE 3</span>
+            <span class="text-[12px] text-[var(--muted-foreground)]">/proc/[pid]/io</span>
+          </div>
+          <div class="text-sm font-semibold mb-1">Layer 2: Heuristic</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed mb-3">
+            Samples 3-second window: calculates write byte ratio &amp; read syscall frequency.
+          </p>
+
+          <div id="cardLayer2Result" class="mt-auto p-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] text-xs">
+            <div class="text-[var(--muted-foreground)] italic">Bypassed if Rule Matches</div>
+          </div>
+        </div>
+
+        <!-- Stage 4: Target Cgroup Partition -->
+        <div id="boxCgroup" class="flex flex-col p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] transition-all duration-300">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-emerald-400 tracking-wide">STAGE 4</span>
+            <span class="text-[12px] text-[var(--muted-foreground)]">cgroups v2</span>
+          </div>
+          <div class="text-sm font-semibold mb-1">Partition Target</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed mb-3">
+            Atomically writes PID into target <code class="text-[12px]">cgroup.procs</code>.
+          </p>
+
+          <div class="space-y-2 mt-auto">
+            <!-- Critical Box -->
+            <div id="targetCritical" class="p-2.5 rounded-lg border border-emerald-900/50 bg-emerald-950/20 transition-all flex items-center justify-between">
+              <div>
+                <div class="text-xs font-bold text-emerald-400">tg/critical</div>
+                <div class="text-[12px] text-emerald-300/70">Never throttled (0% cap)</div>
+              </div>
+              <span id="badgeCritCount" class="text-xs px-2 py-0.5 rounded-full bg-emerald-900/60 text-emerald-300 font-mono">0</span>
+            </div>
+            <!-- Background Box -->
+            <div id="targetBackground" class="p-2.5 rounded-lg border border-sky-900/50 bg-sky-950/20 transition-all flex items-center justify-between">
+              <div>
+                <div class="text-xs font-bold text-sky-400">tg/background</div>
+                <div class="text-[12px] text-sky-300/70">Throttled via io.max at &ge;60&deg;C</div>
+              </div>
+              <span id="badgeBgCount" class="text-xs px-2 py-0.5 rounded-full bg-sky-900/60 text-sky-300 font-mono">0</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Live Execution Log Terminal -->
+      <div class="bg-black/40 border border-[var(--border)] rounded-xl p-3 font-mono text-xs">
+        <div class="flex items-center justify-between pb-1.5 mb-2 border-b border-[var(--border)] text-[var(--muted-foreground)]">
+          <span class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            KERNEL AUDIT &amp; CLASSIFIER LOG
+          </span>
+          <span class="text-[12px]">classifier.py::assign()</span>
+        </div>
+        <div id="terminalLog" class="h-24 overflow-y-auto space-y-1 text-slate-300 text-[12px]">
+          <div class="text-slate-500">> System ready. Select an incoming process above to start the classification walkthrough.</div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Educational Footer: Logic Cheat Sheet -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--card)]">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">Layer 1: Rule-Based Logic</h3>
+        <ul class="text-xs text-[var(--muted-foreground)] space-y-1.5 list-disc list-inside">
+          <li><strong>Critical rules:</strong> <code class="text-slate-200">game</code>, <code class="text-slate-200">firefox</code>, <code class="text-slate-200">code</code>, <code class="text-slate-200">mysql</code>, <code class="text-slate-200">postgres</code></li>
+          <li><strong>Background rules:</strong> <code class="text-slate-200">bulk</code>, <code class="text-slate-200">rsync</code>, <code class="text-slate-200">tar</code>, <code class="text-slate-200">dd</code>, <code class="text-slate-200">backup</code>, <code class="text-slate-200">fio</code></li>
+          <li>Evaluates regex match against full cmdline first-match top-down.</li>
+        </ul>
+      </div>
+
+      <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--card)]">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-purple-400 mb-2">Layer 2: I/O Heuristic Logic</h3>
+        <ul class="text-xs text-[var(--muted-foreground)] space-y-1.5 list-disc list-inside">
+          <li>Triggered <em>only</em> if Layer 1 yields no rule matches.</li>
+          <li><strong>Background if:</strong> <code class="text-slate-200">write_bytes / total &gt; 70%</code> (bulk sequential writer).</li>
+          <li><strong>Critical if:</strong> <code class="text-slate-200">read_syscalls &gt; 200/s</code> (interactive/latency sensitive).</li>
+          <li>Fallback to <code class="text-slate-200">background</code> if ambiguous to preserve system safety.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Demo Process Catalog
+    const PROCESS_SAMPLES = [
+      {
+        id: "game",
+        title: "🎮 Game Texture Loader",
+        badge: "Rule Match",
+        pid: 3841,
+        comm: "fio",
+        cmdline: "fio --name=game_assets workloads/game_like.fio",
+        tier: "critical",
+        path: "rule",
+        matchedRule: "game",
+        io: { reads: "48 MB/s", writes: "0.2 MB/s", syscr: "3400/s" },
+        reason: "Matched pattern 'game' in cmdline"
+      },
+      {
+        id: "bulk",
+        title: "📦 Cloud Backup / Sync",
+        badge: "Rule Match",
+        pid: 3842,
+        comm: "fio",
+        cmdline: "fio --name=bulk_copy workloads/bulk_copy.fio",
+        tier: "background",
+        path: "rule",
+        matchedRule: "bulk",
+        io: { reads: "0 MB/s", writes: "2450 MB/s", syscr: "12/s" },
+        reason: "Matched pattern 'bulk' in cmdline"
+      },
+      {
+        id: "unknown_db",
+        title: "🔍 Custom DB (No Rule)",
+        badge: "Heuristic Match",
+        pid: 4102,
+        comm: "my_custom_db",
+        cmdline: "/opt/bin/my_custom_db --port 9090",
+        tier: "critical",
+        path: "heuristic",
+        matchedRule: null,
+        io: { reads: "12 MB/s", writes: "1 MB/s", syscr: "840/s" },
+        reason: "Heuristic: read_syscalls (840/s > 200/s threshold)"
+      },
+      {
+        id: "unknown_tar",
+        title: "💾 Unknown Stream Writer",
+        badge: "Heuristic Match",
+        pid: 4109,
+        comm: "stream_dump",
+        cmdline: "./stream_dump --out /mnt/tg/archive.bin",
+        tier: "background",
+        path: "heuristic",
+        matchedRule: null,
+        io: { reads: "0.1 MB/s", writes: "980 MB/s", syscr: "4/s" },
+        reason: "Heuristic: write_ratio (99.8% > 70% threshold)"
+      }
+    ];
+
+    let counts = { critical: 0, background: 0 };
+    let isAnimating = false;
+    let autoInterval = null;
+
+    // Render Preset Selection Buttons
+    const btnContainer = document.getElementById("presetButtons");
+    PROCESS_SAMPLES.forEach(proc => {
+      const btn = document.createElement("button");
+      btn.className = "flex flex-col text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--background)] hover:border-sky-500 hover:bg-[var(--accent)] transition";
+      btn.innerHTML = `
+        <span class="text-xs font-semibold text-slate-100">${proc.title}</span>
+        <span class="text-[12px] text-[var(--muted-foreground)] mt-1 flex items-center justify-between">
+          <span>PID ${proc.pid}</span>
+          <span class="px-1.5 py-0.5 rounded text-[12px] ${proc.path === 'rule' ? 'bg-amber-950/60 text-amber-400' : 'bg-purple-950/60 text-purple-400'}">${proc.badge}</span>
+        </span>
+      `;
+      btn.onclick = () => {
+        if (!isAnimating) runPipelineAnimation(proc);
+      };
+      btnContainer.appendChild(btn);
+    });
+
+    function logMsg(msg, color = "text-slate-300") {
+      const t = document.getElementById("terminalLog");
+      const row = document.createElement("div");
+      row.className = color;
+      const now = new Date().toISOString().substring(11, 19);
+      row.innerHTML = `<span class="text-slate-500">[${now}]</span> ${msg}`;
+      t.appendChild(row);
+      t.scrollTop = t.scrollHeight;
+    }
+
+    function resetPipelineUI() {
+      ["boxIngest", "boxLayer1", "boxLayer2", "boxCgroup"].forEach(id => {
+        const el = document.getElementById(id);
+        el.className = el.className.replace(/border-sky-500|border-amber-500|border-purple-500|border-emerald-500|scanner-active|shadow-[^ ]+/g, "").trim();
+      });
+      document.getElementById("targetCritical").classList.remove("ring-2", "ring-emerald-400", "scale-105");
+      document.getElementById("targetBackground").classList.remove("ring-2", "ring-sky-400", "scale-105");
+      document.getElementById("cardProc").innerHTML = '<div class="text-xs text-[var(--muted-foreground)] italic">Awaiting process...</div>';
+      document.getElementById("cardLayer1Result").innerHTML = '<div class="text-[var(--muted-foreground)] italic">Idle</div>';
+      document.getElementById("cardLayer2Result").innerHTML = '<div class="text-[var(--muted-foreground)] italic">Bypassed if Rule Matches</div>';
+    }
+
+    async function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function runPipelineAnimation(proc) {
+      isAnimating = true;
+      resetPipelineUI();
+
+      // Step 1: Ingestion
+      document.getElementById("stepCounter").innerText = "Step 1/4";
+      document.getElementById("stageStatusText").innerText = `Ingesting PID ${proc.pid} (${proc.comm})`;
+      const box1 = document.getElementById("boxIngest");
+      box1.classList.add("border-sky-500", "scanner-active");
+      
+      document.getElementById("cardProc").innerHTML = `
+        <div class="space-y-1">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-bold text-sky-400">PID ${proc.pid}</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-mono text-[12px]">${proc.comm}</span>
+          </div>
+          <div class="text-[12px] text-slate-400 truncate" title="${proc.cmdline}">cmd: ${proc.cmdline}</div>
+        </div>
+      `;
+      logMsg(`Found process with open fd on test disk: PID=${proc.pid} comm="${proc.comm}"`, "text-sky-300");
+      await sleep(1000);
+
+      // Step 2: Layer 1 Rule Matching
+      box1.classList.remove("scanner-active");
+      document.getElementById("stepCounter").innerText = "Step 2/4";
+      document.getElementById("stageStatusText").innerText = "Layer 1: Checking rules against config.yaml";
+      const box2 = document.getElementById("boxLayer1");
+      box2.classList.add("border-amber-500", "scanner-active");
+
+      logMsg(`Evaluating Layer 1 rules for "${proc.comm} ${proc.cmdline}"...`);
+      await sleep(900);
+
+      if (proc.path === "rule") {
+        document.getElementById("cardLayer1Result").innerHTML = `
+          <div class="text-amber-300 font-semibold flex items-center gap-1.5">
+            <span>✓ Match:</span> <code class="bg-amber-950 px-1 py-0.5 rounded text-amber-200">${proc.matchedRule}</code>
+          </div>
+          <div class="text-[12px] text-slate-400 mt-1">Tier assigned: <strong class="text-white">${proc.tier}</strong></div>
+        `;
+        logMsg(`Layer 1 RULE HIT: matched pattern "${proc.matchedRule}" -> assigned to ${proc.tier}`, "text-amber-300 font-semibold");
+        await sleep(900);
+      } else {
+        document.getElementById("cardLayer1Result").innerHTML = `
+          <div class="text-slate-400 flex items-center gap-1.5">
+            <span>✗ No rule matched</span>
+          </div>
+          <div class="text-[12px] text-purple-300 mt-1">Delegating to Layer 2 Heuristic...</div>
+        `;
+        logMsg(`Layer 1 rule check failed (no regex match). Falling back to Layer 2 I/O heuristic.`, "text-slate-400");
+        await sleep(900);
+      }
+
+      box2.classList.remove("scanner-active");
+
+      // Step 3: Layer 2 Heuristic (if needed)
+      document.getElementById("stepCounter").innerText = "Step 3/4";
+      const box3 = document.getElementById("boxLayer2");
+
+      if (proc.path === "heuristic") {
+        document.getElementById("stageStatusText").innerText = "Layer 2: Sampling /proc/<pid>/io (3s delta)";
+        box3.classList.add("border-purple-500", "scanner-active");
+        logMsg(`Sampling /proc/${proc.pid}/io window (read_bytes, write_bytes, syscr)...`, "text-purple-300");
+        await sleep(1100);
+
+        document.getElementById("cardLayer2Result").innerHTML = `
+          <div class="space-y-1">
+            <div class="text-[12px] text-purple-300 font-semibold">I/O Signature:</div>
+            <div class="grid grid-cols-2 text-[12px] text-slate-400">
+              <span>Read: ${proc.io.reads}</span>
+              <span>Write: ${proc.io.writes}</span>
+              <span class="col-span-2">Syscalls: ${proc.io.syscr}</span>
+            </div>
+            <div class="text-[12px] text-emerald-400 font-medium pt-1 border-t border-[var(--border)]">
+              Decision: ${proc.tier}
+            </div>
+          </div>
+        `;
+        logMsg(`Layer 2 Heuristic complete: ${proc.reason} -> ${proc.tier}`, "text-purple-300 font-semibold");
+        await sleep(900);
+        box3.classList.remove("scanner-active");
+      } else {
+        document.getElementById("cardLayer2Result").innerHTML = `
+          <div class="text-slate-500 italic">Bypassed (resolved in Layer 1)</div>
+        `;
+      }
+
+      // Step 4: Cgroup Partition Target
+      document.getElementById("stepCounter").innerText = "Step 4/4";
+      document.getElementById("stageStatusText").innerText = `Moving PID ${proc.pid} -> /sys/fs/cgroup/tg/${proc.tier}`;
+      const box4 = document.getElementById("boxCgroup");
+      box4.classList.add("border-emerald-500");
+
+      const targetEl = proc.tier === "critical" ? document.getElementById("targetCritical") : document.getElementById("targetBackground");
+      targetEl.classList.add("ring-2", proc.tier === "critical" ? "ring-emerald-400" : "ring-sky-400", "scale-105");
+
+      counts[proc.tier]++;
+      if (proc.tier === "critical") {
+        document.getElementById("badgeCritCount").innerText = counts.critical;
+      } else {
+        document.getElementById("badgeBgCount").innerText = counts.background;
+      }
+
+      logMsg(`echo ${proc.pid} > /sys/fs/cgroup/tg/${proc.tier}/cgroup.procs [SUCCESS]`, "text-emerald-400 font-bold");
+      await sleep(1000);
+
+      document.getElementById("stageStatusText").innerText = `PID ${proc.pid} successfully partitioned into ${proc.tier}`;
+      isAnimating = false;
+    }
+
+    // Auto Run Loop
+    const autoBtn = document.getElementById("btnAutoRun");
+    autoBtn.onclick = () => {
+      if (autoInterval) {
+        clearInterval(autoInterval);
+        autoInterval = null;
+        autoBtn.innerText = "▶ Auto-Cycle Demo";
+        autoBtn.className = autoBtn.className.replace("bg-amber-600", "bg-[var(--primary)]");
+        logMsg("Auto-cycle stopped.", "text-slate-400");
+      } else {
+        let idx = 0;
+        autoBtn.innerText = "⏹ Stop Auto-Cycle";
+        autoBtn.className = autoBtn.className.replace("bg-[var(--primary)]", "bg-amber-600");
+        logMsg("Auto-cycle started: iterating through sample processes...", "text-amber-400");
+        
+        runPipelineAnimation(PROCESS_SAMPLES[idx % PROCESS_SAMPLES.length]);
+        idx++;
+        autoInterval = setInterval(() => {
+          if (!isAnimating) {
+            runPipelineAnimation(PROCESS_SAMPLES[idx % PROCESS_SAMPLES.length]);
+            idx++;
+          }
+        }, 5500);
+      }
+    };
+
+    // Reset button
+    document.getElementById("btnReset").onclick = () => {
+      if (autoInterval) {
+        clearInterval(autoInterval);
+        autoInterval = null;
+        autoBtn.innerText = "▶ Auto-Cycle Demo";
+        autoBtn.className = autoBtn.className.replace("bg-amber-600", "bg-[var(--primary)]");
+      }
+      counts = { critical: 0, background: 0 };
+      document.getElementById("badgeCritCount").innerText = "0";
+      document.getElementById("badgeBgCount").innerText = "0";
+      document.getElementById("terminalLog").innerHTML = '<div class="text-slate-500">> System reset. Ready for next process.</div>';
+      resetPipelineUI();
+      document.getElementById("stepCounter").innerText = "Step 0/4";
+      document.getElementById("stageStatusText").innerText = "Ready for incoming process";
+      isAnimating = false;
+    };
+  </script>
+</body>
+</html>

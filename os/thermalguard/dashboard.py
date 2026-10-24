@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """ThermalGuard live dashboard.
 Run (as root):  sudo python3 dashboard.py   then open http://localhost:8000
-Only the Python standard library is used. Nothing to install."""
+Only the Python standard library is used (plus PyYAML). Nothing else to install."""
 import csv, json, os, signal, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from classifier import Classifier
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(ROOT, "results")
@@ -12,11 +13,14 @@ IO_MAX = "/sys/fs/cgroup/tg/background/io.max"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 try:
     import yaml
-    DEV = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))["device"]
+    CFG = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
+    DEV = CFG["device"]
 except Exception:
     DEV = "7:9"
+    CFG = None
 
 STATE = {"proc": None, "mode": None, "start": 0.0, "duration": 0}
+CLASSIFIER_STATE = {"instance": None, "thread": None, "active": False}
 LOCK = threading.Lock()
 os.makedirs(RES, exist_ok=True)
 
@@ -65,14 +69,18 @@ def release_limit():
 
 
 def start_run(mode, duration):
-    if mode not in ("baseline", "guard"):
+    if mode not in ("baseline", "guard", "classified"):
         return False, "Invalid mode"
 
     if STATE["proc"] and STATE["proc"].poll() is None:
         return False, "A run is already in progress"
 
+    # For results, "classified" stores its data under the "guard" key
+    # so the comparison table works (classified IS guard + auto-classification)
+    result_key = "guard" if mode == "classified" else mode
+
     for suffix in (".csv", ".json"):
-        path = os.path.join(RES, f"{mode}{suffix}")
+        path = os.path.join(RES, f"{result_key}{suffix}")
         if os.path.exists(path):
             os.remove(path)
 
@@ -82,14 +90,28 @@ def start_run(mode, duration):
     print(f"\nStarting ThermalGuard {mode.upper()} run ({duration}s)", flush=True)
     print(f"Saving logs to {log_path}\n", flush=True)
 
+    # Start the classifier for "classified" mode
+    if mode == "classified" and CFG:
+        clf = Classifier(CFG)
+        clf.reset()
+        CLASSIFIER_STATE["instance"] = clf
+        CLASSIFIER_STATE["thread"] = clf.run_background()
+        CLASSIFIER_STATE["active"] = True
+        print("Classifier thread started — will auto-assign processes", flush=True)
+    else:
+        CLASSIFIER_STATE["active"] = False
+
+    # Pick the right experiment script
+    if mode == "classified":
+        script = os.path.join(ROOT, "scripts", "run_auto_experiment.sh")
+        script_mode = "guard"   # ThermalGuard throttling is ON
+    else:
+        script = os.path.join(ROOT, "scripts", "run_experiment.sh")
+        script_mode = mode
+
     try:
         proc = subprocess.Popen(
-            [
-                "bash",
-                os.path.join(ROOT, "scripts", "run_experiment.sh"),
-                mode,
-                str(duration),
-            ],
+            ["bash", script, script_mode, str(duration)],
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -100,7 +122,7 @@ def start_run(mode, duration):
         )
 
         STATE["proc"] = proc
-        STATE["mode"] = mode
+        STATE["mode"] = result_key
         STATE["start"] = time.time()
         STATE["duration"] = int(duration)
 
@@ -116,6 +138,11 @@ def start_run(mode, duration):
                 if process.stdout:
                     process.stdout.close()
                 logfile.close()
+                # Stop classifier when the run finishes
+                if CLASSIFIER_STATE["active"]:
+                    CLASSIFIER_STATE["instance"].stop()
+                    CLASSIFIER_STATE["active"] = False
+                    print("Classifier stopped (run finished)", flush=True)
 
         threading.Thread(
             target=stream_logs,
@@ -123,7 +150,8 @@ def start_run(mode, duration):
             daemon=True,
         ).start()
 
-        return True, f"Started {mode} run for {duration} seconds"
+        label = "classified (auto)" if mode == "classified" else mode
+        return True, f"Started {label} run for {duration} seconds"
 
     except Exception as exc:
         log.close()
@@ -147,6 +175,10 @@ def stop_run():
                     os.killpg(p.pid, signal.SIGKILL)
                 except OSError:
                     pass
+    # Stop classifier if running
+    if CLASSIFIER_STATE["active"]:
+        CLASSIFIER_STATE["instance"].stop()
+        CLASSIFIER_STATE["active"] = False
     release_limit()
     return 200, "stopped"
 
@@ -157,6 +189,19 @@ def api_data():
         elapsed = time.time() - STATE["start"] if mode else 0
         dur = STATE["duration"]
     ref_mode = None if mode is None else ("baseline" if mode == "guard" else "guard")
+
+    # Classifier events for the dashboard
+    clf = CLASSIFIER_STATE["instance"]
+    clf_events = []
+    if clf and clf.log:
+        start_t = STATE["start"]
+        for e in clf.log:
+            clf_events.append({
+                "t": round(e["ts"] - start_t, 1) if start_t else 0,
+                "pid": e["pid"], "comm": e["comm"],
+                "tier": e["tier"], "msg": e["msg"],
+            })
+
     return {
         "running": run, "mode": mode, "elapsed": elapsed, "duration": dur,
         "setup_ok": os.path.isdir("/mnt/tg") and os.path.isdir("/sys/fs/cgroup/tg/background"),
@@ -164,6 +209,8 @@ def api_data():
         "rows": read_rows(mode) if mode else [],
         "ref_mode": ref_mode, "ref": read_rows(ref_mode) if ref_mode else [],
         "summaries": {"baseline": summary("baseline"), "guard": summary("guard")},
+        "classifier_active": CLASSIFIER_STATE["active"],
+        "classifier_events": clf_events,
     }
 
 
@@ -185,6 +232,12 @@ class H(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/":
             self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+        elif path == "/animation":
+            anim_path = os.path.join(ROOT, "pipeline_animation.html")
+            if os.path.exists(anim_path):
+                self._send(200, open(anim_path, "rb").read(), "text/html; charset=utf-8")
+            else:
+                self._send(404, {"error": "animation file not found"})
         elif path == "/api/data":
             self._send(200, api_data())
         else:
@@ -212,7 +265,7 @@ PAGE = r"""<!doctype html>
 <title>ThermalGuard Dashboard</title>
 <style>
 :root{--bg:#0e1117;--card:#161b26;--line:#252c3b;--txt:#e6e9f0;--mut:#8b93a7;
---red:#ff6b6b;--blue:#4dabf7;--green:#51cf66;--amber:#ffd43b;--orange:#ffa94d}
+--red:#ff6b6b;--blue:#4dabf7;--green:#51cf66;--amber:#ffd43b;--orange:#ffa94d;--purple:#da77f2}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
 .wrap{max-width:1150px;margin:0 auto;padding:18px}
@@ -221,7 +274,7 @@ h1{margin:0;font-size:24px}.sub{color:var(--mut);margin:2px 0 16px}
 .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
 button{border:0;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;color:#fff}
 button:disabled{opacity:.4;cursor:not-allowed}
-.b1{background:#2f9e44}.b2{background:#3b5bdb}.b3{background:#c92a2a}
+.b1{background:#2f9e44}.b2{background:#3b5bdb}.b3{background:#c92a2a}.b4{background:#7048e8}
 select{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:9px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
 .kpi .l{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
@@ -237,13 +290,24 @@ canvas{width:100%;height:220px;display:block}
 .warn{background:#431313;border:1px solid var(--red);color:#ffc9c9;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:none}
 table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
 th{color:var(--mut);font-weight:600;font-size:13px}.note{color:var(--mut);font-size:13px;margin-top:8px}
+.clf-panel{margin-bottom:14px}
+.clf-panel h3{margin:0 0 8px;font-size:14px;color:var(--purple);font-weight:600;display:flex;align-items:center;gap:8px}
+.clf-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.clf-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}.clf-dot.off{background:var(--mut)}
+.clf-row{display:flex;gap:12px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;align-items:center}
+.clf-row:last-child{border:0}
+.clf-tier{padding:2px 10px;border-radius:99px;font-weight:700;font-size:12px}
+.clf-tier.critical{background:#12351c;color:var(--green)}.clf-tier.background{background:#1a1a3e;color:var(--blue)}
+.clf-method{color:var(--mut);font-size:12px}
+.clf-empty{color:var(--mut);font-style:italic;padding:10px 0}
 </style></head><body><div class="wrap">
 <h1>ThermalGuard</h1>
 <div class="sub">Workload-aware NVMe I/O throttling with cgroups v2 &middot; temperature is <b>simulated</b> &middot; test disk is a RAM-backed loop device</div>
 <div class="warn" id="warn"></div>
 <div class="card bar">
-  <button class="b1" id="bGuard">&#9654; Inject load with ThermalGuard</button>
-  <button class="b2" id="bBase">&#9654; Inject load, no control (baseline)</button>
+  <button class="b1" id="bGuard">&#9654; ThermalGuard (manual cgroups)</button>
+  <button class="b4" id="bClass">&#9654; ThermalGuard (auto-classified)</button>
+  <button class="b2" id="bBase">&#9654; Baseline (no control)</button>
   <button class="b3" id="bStop">&#9632; Stop</button>
   <label style="color:var(--mut)">Duration
     <select id="dur"><option value="60">60 s</option><option value="90">90 s</option>
@@ -251,6 +315,15 @@ th{color:var(--mut);font-weight:600;font-size:13px}.note{color:var(--mut);font-s
   <span id="msg" style="color:var(--mut)"></span>
 </div>
 <div class="prog"><div id="prog"></div></div>
+
+<div class="card clf-panel" id="clfPanel" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <h3><span class="clf-dot off" id="clfDot"></span> Auto-Classifier</h3>
+    <a href="/animation" target="_blank" style="color:var(--blue);font-size:12px;text-decoration:none;font-weight:600">Open Interactive Animation ↗</a>
+  </div>
+  <div id="clfLog"><div class="clf-empty">Classifier will detect and assign processes when a classified run starts.</div></div>
+</div>
+
 <div class="kpis">
   <div class="card kpi"><div class="l">State</div><div class="v"><span class="badge IDLE" id="kState">IDLE</span></div></div>
   <div class="card kpi"><div class="l">Temperature (sim)</div><div class="v" id="kTemp">--</div></div>
@@ -297,13 +370,36 @@ function drawChart(cv,series,o){
     g.fillText(s.label,lx+14,11);lx+=g.measureText(s.label).width+34;});
 }
 
+function renderClassifier(d){
+  const panel=$('clfPanel'), dot=$('clfDot'), log=$('clfLog');
+  const evts=d.classifier_events||[];
+  const show=d.classifier_active||evts.length>0;
+  panel.style.display=show?'block':'none';
+  dot.className='clf-dot '+(d.classifier_active?'on':'off');
+  if(!evts.length){
+    log.innerHTML='<div class="clf-empty">Classifier is scanning for new processes\u2026</div>';
+    return;
+  }
+  log.innerHTML=evts.map(e=>{
+    const parts=e.msg.split('|').map(s=>s.trim());
+    const method=parts[0]||'';
+    return '<div class="clf-row">'
+      +'<span style="color:var(--mut);min-width:48px">'+e.t.toFixed(1)+'s</span>'
+      +'<span style="min-width:70px">PID '+e.pid+'</span>'
+      +'<b>'+e.comm+'</b>'
+      +'<span class="clf-tier '+e.tier+'">'+e.tier+'</span>'
+      +'<span class="clf-method">'+method+'</span>'
+      +'</div>';
+  }).join('');
+}
+
 function render(d){
   const rows=d.rows,last=rows.length?rows[rows.length-1]:null;
   const warn=$('warn'),pr=[];
   if(!d.is_root)pr.push('Dashboard is not running as root. Restart with: sudo python3 dashboard.py');
   if(!d.setup_ok)pr.push('Test disk (/mnt/tg) or cgroups not found. Redo the loop-disk and cgroup setup steps.');
   warn.style.display=pr.length?'block':'none';warn.textContent=pr.join('  |  ');
-  $('bGuard').disabled=$('bBase').disabled=d.running||!d.setup_ok||!d.is_root;$('bStop').disabled=!d.running;
+  $('bGuard').disabled=$('bBase').disabled=$('bClass').disabled=d.running||!d.setup_ok||!d.is_root;$('bStop').disabled=!d.running;
   const st=last?last.state:'IDLE';const kb=$('kState');kb.textContent=d.running||last?st:'IDLE';kb.className='badge '+(d.running||last?st:'IDLE');
   $('kTemp').textContent=last?last.temp.toFixed(1)+' \u00b0C':'--';
   $('kBg').textContent=last?last.bg.toFixed(0)+' MB/s':'--';
@@ -327,6 +423,7 @@ function render(d){
     const spec=[['Peak temperature (sim)','peak',1,' \u00b0C'],['Critical p99 latency','p99_us',1,' \u00b5s'],
       ['Critical read IOPS','iops',0,''],['Background write speed','bg_mbps',0,' MB/s']];
     $('tbl').innerHTML=spec.map(r=>'<tr><td>'+r[0]+'</td><td>'+f(b,r[1],r[2],r[3])+'</td><td>'+f(gd,r[1],r[2],r[3])+'</td></tr>').join('');}
+  renderClassifier(d);
 }
 async function post(url){
   try{const r=await fetch(url,{method:'POST'});const j=await r.json();$('msg').textContent=j.message;}
@@ -334,6 +431,7 @@ async function post(url){
   poll();
 }
 $('bGuard').onclick=()=>post('/api/start?mode=guard&duration='+$('dur').value);
+$('bClass').onclick=()=>post('/api/start?mode=classified&duration='+$('dur').value);
 $('bBase').onclick=()=>post('/api/start?mode=baseline&duration='+$('dur').value);
 $('bStop').onclick=()=>post('/api/stop');
 async function poll(){try{render(await (await fetch('/api/data')).json());}

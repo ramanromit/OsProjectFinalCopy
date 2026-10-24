@@ -5,7 +5,7 @@ background: background
 interval: 1.0
 thresholds: {warn: 60, hot: 70, hysteresis: 3}
 limits: {warn: 0.8, hot: 0.3}    # fraction of full_speed_mbps allowed for background writes
-full_speed_mbps: 1700
+full_speed_mbps: 2546
 sensor:
   simulate: true                 # false = try real NVMe sensor first
   hwmon_glob: "/sys/class/nvme/nvme0/hwmon*/temp1_input"
