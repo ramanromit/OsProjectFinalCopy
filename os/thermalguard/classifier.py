@@ -134,20 +134,48 @@ class Classifier:
     # ------------------------------------------------------------------
     # 2. Rule-based classification
     # ------------------------------------------------------------------
-    def classify_by_rules(self, pid):
-        """Try to match the process name/cmdline against the rule list.
-        Returns ('critical'|'background', matched_pattern) or (None, None)."""
-        comm = self._read_comm(pid)
-        cmdline = self._read_cmdline(pid)
-        text = f"{comm} {cmdline}"
+    def match_rules(self, comm, cmdline=""):
+        """Pure pattern matching against rules list."""
+        text = f"{comm or ''} {cmdline or ''}"
         for regex, tier in self.rules:
             if regex.search(text):
                 return tier, regex.pattern
         return None, None
 
+    def classify_by_rules(self, pid):
+        """Try to match the process name/cmdline against the rule list.
+        Returns ('critical'|'background', matched_pattern) or (None, None)."""
+        comm = self._read_comm(pid)
+        cmdline = self._read_cmdline(pid)
+        return self.match_rules(comm, cmdline)
+
     # ------------------------------------------------------------------
     # 3. Heuristic classification (observe I/O pattern)
     # ------------------------------------------------------------------
+    def evaluate_heuristic_io(self, dr, dw, dsc_r=0, duration=OBSERVE_SECONDS):
+        """Evaluate I/O deltas against heuristic thresholds and anti-flapping guard."""
+        total = dr + dw
+        if total < 5000000:       # Anti-flapping: < 5MB active I/O over window is considered transient
+            return None, f"transient_burst_ignored ({total/1e6:.1f}MB)"
+
+        write_ratio = dw / total if total > 0 else 0.0
+        read_syscall_rate = dsc_r / duration if duration > 0 else 0.0
+
+        if write_ratio > WRITE_RATIO_THRESH:
+            reason = f"write_ratio={write_ratio:.0%} (sustained bulk writer quarantined)"
+            tier = "background"
+        elif read_syscall_rate > SYSCALL_RATE_THRESH:
+            reason = f"read_syscalls={read_syscall_rate:.0f}/s (interactive reads protected)"
+            tier = "critical"
+        elif dr > dw:
+            reason = f"read_dominant (r={dr/1e6:.1f}MB w={dw/1e6:.1f}MB)"
+            tier = "critical"
+        else:
+            reason = "ambiguous, using default"
+            tier = self.default_tier
+
+        return tier, reason
+
     def classify_by_heuristic(self, pid):
         """Watch the process for a few seconds and classify by I/O pattern.
 
@@ -171,27 +199,7 @@ class Classifier:
         dw = io2["write_bytes"] - io1["write_bytes"]
         dsc_r = io2["syscr"]    - io1["syscr"]
 
-        total = dr + dw
-        if total < 5000000:       # Anti-flapping: < 5MB active I/O over window is considered transient
-            return None, f"transient_burst_ignored ({total/1e6:.1f}MB)"
-
-        write_ratio = dw / total
-        read_syscall_rate = dsc_r / OBSERVE_SECONDS
-
-        if write_ratio > WRITE_RATIO_THRESH:
-            reason = f"write_ratio={write_ratio:.0%} (sustained bulk writer quarantined)"
-            tier = "background"
-        elif read_syscall_rate > SYSCALL_RATE_THRESH:
-            reason = f"read_syscalls={read_syscall_rate:.0f}/s (interactive reads protected)"
-            tier = "critical"
-        elif dr > dw:
-            reason = f"read_dominant (r={dr/1e6:.1f}MB w={dw/1e6:.1f}MB)"
-            tier = "critical"
-        else:
-            reason = "ambiguous, using default"
-            tier = self.default_tier
-
-        return tier, reason
+        return self.evaluate_heuristic_io(dr, dw, dsc_r, OBSERVE_SECONDS)
 
     # ------------------------------------------------------------------
     # 4. Assign a PID to a cgroup

@@ -266,6 +266,11 @@ def build_pdf():
          Paragraph("Side-by-side comparison of Legacy Threshold Reactive Governor vs Predictive Governor.<br/>"
                    "<b>Physics Flaw:</b> Legacy 60/70&deg;C threshold governor reacts too late; thermal inertia drives temp over 70&deg;C "
                    "(overshoot of +2 to +4&deg;C) with sawtooth oscillation, whereas Predictive clamps smoothly.", table_cell)],
+
+        [Paragraph("<font color='#6B46C1'><b>🧪 5 Test Cases ↗<br/>(Evaluation Lab)</b></font>", table_cell),
+         Paragraph("<b>Interactive Lab &<br/>Automated Suite</b>", table_cell_bold),
+         Paragraph("Executes all 5 test cases contrasting Normal vs ThermalGuard scenarios (Read SLA, Cgroups Division, "
+                   "Rogue Quarantine, Anti-Flapping Burst Guard, Momentum Control). Run: <code>python3 tests/run_all_test_cases.py</code>", table_cell)],
     ]
     t_btns = Table(btns_data, colWidths=[98, 106, 352])
     t_btns.setStyle(TableStyle([

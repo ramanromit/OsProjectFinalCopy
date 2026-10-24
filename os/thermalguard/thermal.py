@@ -18,9 +18,12 @@ class Thermal:
         self.a = (s["full_load_temp"] - self.amb) * self.b / cfg["full_speed_mbps"]
         self.last = time.time()
 
-    def read(self, write_mbps):
+    def read(self, write_mbps, dt=None):
         if self.sim:
-            now = time.time(); dt = now - self.last; self.last = now
+            now = time.time()
+            if dt is None:
+                dt = now - self.last
+            self.last = now
             self.temp += (self.a * write_mbps - self.b * (self.temp - self.amb)) * dt
             return self.temp
         try:

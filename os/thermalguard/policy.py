@@ -25,8 +25,8 @@ class Policy:
         self.dT_dt = 0.0
         self.proj_temp = None
 
-    def update(self, temp):
-        now = time.time()
+    def update(self, temp, timestamp=None):
+        now = time.time() if timestamp is None else timestamp
         if temp is None:
             self.state = "NORMAL"
             return self.state

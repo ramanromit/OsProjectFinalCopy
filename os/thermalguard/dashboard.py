@@ -228,6 +228,35 @@ def api_data():
     }
 
 
+def execute_testcases_api(tc_arg):
+    tests_dir = os.path.abspath(os.path.join(ROOT, "..", "..", "tests"))
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    try:
+        from run_all_test_cases import (
+            run_tc1_victim_effect, run_tc2_autonomous_division,
+            run_tc3_rogue_binary_quarantine, run_tc4_antiflapping_burst_guard,
+            run_tc5_thermal_momentum_predictive
+        )
+        tc_map = {
+            "1": ("TC-1", "Latency-Critical Read Protection (Victim Effect)", run_tc1_victim_effect),
+            "2": ("TC-2", "Multi-Process Ingestion & Layer 1 Division", run_tc2_autonomous_division),
+            "3": ("TC-3", "Zero-Day Rogue Binary Quarantine (Heuristics)", run_tc3_rogue_binary_quarantine),
+            "4": ("TC-4", "Anti-Flapping Short Burst Guard (<5 MB)", run_tc4_antiflapping_burst_guard),
+            "5": ("TC-5", "Thermal Momentum & Predictive Overshoot Control", run_tc5_thermal_momentum_predictive),
+        }
+        out = {}
+        target_keys = ["1", "2", "3", "4", "5"] if tc_arg == "all" else [tc_arg]
+        for k in target_keys:
+            if k in tc_map:
+                tid, name, fn = tc_map[k]
+                passed, data = fn(live=False)
+                out[tid] = {"id": tid, "name": name, "passed": passed, "data": data}
+        return {"status": "ok", "results": out}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -262,6 +291,18 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, open(p, "rb").read(), "text/html; charset=utf-8")
             else:
                 self._send(404, {"error": "demo_reactive.html not found"})
+        elif path == "/demo-testcases":
+            p = os.path.join(ROOT, "demo_testcases.html")
+            if os.path.exists(p):
+                self._send(200, open(p, "rb").read(), "text/html; charset=utf-8")
+            else:
+                self._send(404, {"error": "demo_testcases.html not found"})
+        elif path == "/api/testcases/run":
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            tc_arg = q.get("tc", ["all"])[0]
+            res = execute_testcases_api(tc_arg)
+            self._send(200, res)
         elif path == "/animation":
             anim_path = os.path.join(ROOT, "pipeline_animation.html")
             if os.path.exists(anim_path):
