@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ThermalGuard Dashboard - Workload-Aware NVMe Throttling</title>
+<style>
+:root{--bg:#0e1117;--card:#161b26;--line:#252c3b;--txt:#e6e9f0;--mut:#8b93a7;
+--red:#ff6b6b;--blue:#4dabf7;--green:#51cf66;--amber:#ffd43b;--orange:#ffa94d;--purple:#da77f2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1240px;margin:0 auto;padding:18px}
+h1{margin:0;font-size:24px}.sub{color:var(--mut);margin:2px 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+button{border:0;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;color:#fff;transition:opacity 0.2s}
+button:disabled{opacity:.35;cursor:not-allowed}
+.b-predictive{background:#7048e8}
+.b-rogue{background:#d9480f}
+.b-reactive{background:#e8590c}
+.b-static{background:#1864ab}
+.b-baseline{background:#3b5bdb}
+.b-stop{background:#c92a2a}
+select{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.kpi .l{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.kpi .v{font-size:26px;font-weight:700;margin-top:4px}
+.badge{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700;font-size:18px}
+.NORMAL{background:#12351c;color:var(--green)}.WARM{background:#3d3208;color:var(--amber)}
+.HOT{background:#431313;color:var(--red)}.STATIC{background:#1c2d4a;color:var(--blue)}.IDLE{background:#222a39;color:var(--mut)}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:12px}
+.charts h3{margin:0 0 6px;font-size:14px;color:var(--mut);font-weight:600}
+canvas{width:100%;height:220px;display:block}
+.prog{height:6px;background:var(--line);border-radius:9px;overflow:hidden;margin:0 0 14px}
+.prog div{height:100%;width:0;background:var(--blue);transition:width .5s}
+.warn{background:#431313;border:1px solid var(--red);color:#ffc9c9;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:none}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.04em}
+.note{color:var(--mut);font-size:12px;margin-top:8px}
+
+/* Classification Live Pipeline Stage */
+.pipeline-card{margin-bottom:14px;border:1px solid var(--line);background:linear-gradient(180deg,#141923,#10141d);border-radius:14px;padding:16px;position:relative;overflow:hidden}
+.pipeline-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:10px}
+.pipeline-title{font-size:15px;font-weight:700;color:var(--purple);display:flex;align-items:center;gap:8px}
+.clf-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.clf-dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}.clf-dot.off{background:var(--mut)}
+
+.stage-grid{display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;gap:8px;align-items:center;margin:12px 0}
+@media(max-width:850px){.stage-grid{grid-template-columns:1fr;gap:12px}.arrow-col{display:none}}
+.stage-box{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px;min-height:160px;display:flex;flex-direction:column;position:relative;transition:all 0.3s}
+.stage-box.active{border-color:var(--blue);box-shadow:0 0 15px rgba(77,171,247,0.25)}
+.stage-tag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px}
+.stage-name{font-size:14px;font-weight:600;margin-bottom:8px}
+.arrow-col{display:flex;justify-content:center;align-items:center;color:var(--mut);font-size:22px;font-weight:700}
+.pulse-arrow{animation:arrowPulse 1.2s infinite ease-in-out}
+@keyframes arrowPulse{0%,100%{opacity:0.3;transform:translateX(-2px)}50%{opacity:1;transform:translateX(3px)}}
+
+/* Process Token */
+.proc-token{padding:10px;border-radius:10px;background:#1a2130;border:1px solid var(--blue);animation:popIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);margin-top:auto}
+@keyframes popIn{0%{opacity:0;transform:scale(0.85)}100%{opacity:1;transform:scale(1)}}
+.token-id{font-size:13px;font-weight:700;color:var(--blue);display:flex;justify-content:space-between;align-items:center}
+.token-comm{font-size:12px;color:var(--txt);font-weight:600;margin-top:2px}
+.token-cmd{font-size:11px;color:var(--mut);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;margin-top:2px}
+
+/* Layer Results */
+.layer-rule-hit{padding:8px 10px;border-radius:8px;background:rgba(255,212,59,0.12);border:1px solid var(--amber);color:var(--amber);font-size:12px;font-weight:600;margin-top:auto}
+.layer-skip{padding:8px 10px;border-radius:8px;background:rgba(139,147,167,0.08);border:1px dashed var(--line);color:var(--mut);font-size:12px;font-style:italic;margin-top:auto}
+.layer-heur-hit{padding:8px 10px;border-radius:8px;background:rgba(218,119,242,0.15);border:1px solid var(--purple);color:var(--purple);font-size:12px;font-weight:600;margin-top:auto}
+
+/* Target Cgroup Boxes */
+.cgroups-col{display:flex;flex-direction:column;gap:8px;margin-top:auto}
+.cg-box{padding:8px 10px;border-radius:8px;border:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-size:12px;transition:all 0.3s}
+.cg-box.critical{border-color:rgba(81,207,102,0.3);background:rgba(81,207,102,0.06)}
+.cg-box.critical.active{border-color:var(--green);background:rgba(81,207,102,0.22);box-shadow:0 0 14px rgba(81,207,102,0.4);transform:scale(1.02)}
+.cg-box.background{border-color:rgba(77,171,247,0.3);background:rgba(77,171,247,0.06)}
+.cg-box.background.active{border-color:var(--blue);background:rgba(77,171,247,0.22);box-shadow:0 0 14px rgba(77,171,247,0.4);transform:scale(1.02)}
+.cg-count{font-weight:700;font-family:monospace;padding:2px 8px;border-radius:99px;font-size:12px}
+
+/* Log Stream */
+.clf-stream{background:#090c10;border:1px solid var(--line);border-radius:10px;padding:10px 12px;max-height:120px;overflow-y:auto;font-family:monospace;font-size:12px}
+.clf-stream-item{display:flex;gap:12px;padding:3px 0;align-items:center;border-bottom:1px solid #141a24}
+.clf-stream-item:last-child{border:0}
+.clf-badge{padding:1px 8px;border-radius:99px;font-size:11px;font-weight:700;text-transform:uppercase}
+.clf-badge.critical{background:#12351c;color:var(--green)}.clf-badge.background{background:#1a233a;color:var(--blue)}
+.clf-badge.unassigned{background:#2a2f3a;color:var(--mut)}
+
+/* Lab Navigation Links */
+.lab-link{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:10px;font-size:13px;font-weight:600;text-decoration:none;transition:all 0.2s;border:1px solid var(--line)}
+.lab-rogue{background:rgba(217,72,15,0.15);color:var(--orange);border-color:rgba(217,72,15,0.35)}
+.lab-rogue:hover{background:rgba(217,72,15,0.28);border-color:var(--orange);transform:translateY(-1px)}
+.lab-reactive{background:rgba(232,89,12,0.15);color:var(--amber);border-color:rgba(232,89,12,0.35)}
+.lab-reactive:hover{background:rgba(232,89,12,0.28);border-color:var(--amber);transform:translateY(-1px)}
+</style></head><body><div class="wrap">
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:12px;border-bottom:1px solid var(--line);padding-bottom:12px">
+  <div>
+    <h1 style="margin:0;font-size:24px">ThermalGuard: Workload-Aware NVMe Throttling</h1>
+    <div class="sub" style="margin:2px 0 0">cgroups v2 I/O control &middot; Rate-of-Rise (dT/dt) Predictive Governor &middot; Autonomous Quarantine</div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <a href="/demo-rogue" class="lab-link lab-rogue" title="Open standalone Rogue Binary Quarantine demo page">&#128737;&#65039; Rogue Binary Demo &nearr;</a>
+    <a href="/demo-reactive" class="lab-link lab-reactive" title="Open standalone Reactive Governor overshoot analysis page">&#9889; Reactive Governor Lab &nearr;</a>
+  </div>
+</div>
+
+<div class="warn" id="warn"></div>
+
+<!-- Primary Control Bar -->
+<div class="card bar">
+  <button class="b-predictive" id="bClass" title="Flagship: Auto-partitions workloads & uses dT/dt rate-of-rise governor to eliminate thermal overshoot">&#9654; ThermalGuard (Auto-Partition)</button>
+  <button class="b-baseline" id="bBase" title="Uncontrolled baseline: drive overheats and tail latencies jump">&#9654; Baseline (No Control)</button>
+  <button class="b-stop" id="bStop">&#9632; Stop</button>
+  
+  <label style="color:var(--mut);margin-left:auto">Duration
+    <select id="dur"><option value="60">60 s</option><option value="90" selected>90 s</option>
+    <option value="150">150 s</option></select></label>
+  <span id="msg" style="color:var(--mut);font-size:13px"></span>
+</div>
+<div class="prog"><div id="prog"></div></div>
+
+<!-- Live Process Division & Classification Pipeline -->
+<div class="pipeline-card" id="pipelineCard">
+  <div class="pipeline-hdr">
+    <div class="pipeline-title">
+      <span class="clf-dot off" id="clfDot"></span> Autonomous Process Discovery &amp; Quarantine Pipeline
+    </div>
+    <div style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:10px">
+      <span id="phaseBadge" style="padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;background:#252c3b;color:var(--mut)">READY</span>
+      <span id="pipelineStatus">Waiting for experiment to start...</span>
+    </div>
+  </div>
+
+  <div class="stage-grid">
+    <!-- Step 1: Ingestion -->
+    <div class="stage-box" id="stageIngest">
+      <div class="stage-tag" style="color:var(--blue)">Step 1 &middot; Detection</div>
+      <div class="stage-name">/proc Scanner</div>
+      <div id="slotIngest">
+        <div style="color:var(--mut);font-size:12px;font-style:italic">Polling /proc for open file handles on NVMe device...</div>
+      </div>
+    </div>
+
+    <!-- Arrow 1 -->
+    <div class="arrow-col"><span class="pulse-arrow">&#10140;</span></div>
+
+    <!-- Step 2: Layer 1 & 2 Filter Layers -->
+    <div class="stage-box" id="stageFilter">
+      <div class="stage-tag" style="color:var(--amber)">Step 2 &middot; Classification</div>
+      <div class="stage-name">Two-Layer Classifier</div>
+      <div id="slotFilter">
+        <div style="color:var(--mut);font-size:12px;font-style:italic">Layer 1: Rules &middot; Layer 2: Heuristic / Anti-Flapping</div>
+      </div>
+    </div>
+
+    <!-- Arrow 2 -->
+    <div class="arrow-col"><span class="pulse-arrow">&#10140;</span></div>
+
+    <!-- Step 3: Target Cgroups Partition -->
+    <div class="stage-box" id="stageCgroup">
+      <div class="stage-tag" style="color:var(--green)">Step 3 &middot; Partition Target</div>
+      <div class="stage-name">cgroups v2 Tier</div>
+      <div class="cgroups-col">
+        <div class="cg-box critical" id="boxCrit">
+          <span><b>tg/critical</b> (Protected)</span>
+          <span class="cg-count" id="cntCrit" style="background:#12351c;color:var(--green)">0</span>
+        </div>
+        <div class="cg-box background" id="boxBg">
+          <span><b>tg/background</b> (Throttled)</span>
+          <span class="cg-count" id="cntBg" style="background:#1a233a;color:var(--blue)">0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size:11px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 6px">Kernel Migration &amp; Quarantine Audit Log:</div>
+  <div class="clf-stream" id="clfStream">
+    <div style="color:var(--mut);font-style:italic">No classification migrations yet. Choose a run mode above to begin.</div>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="card kpi"><div class="l">State</div><div class="v"><span class="badge IDLE" id="kState">IDLE</span></div></div>
+  <div class="card kpi"><div class="l">Temperature (sim)</div><div class="v" id="kTemp">--</div></div>
+  <div class="card kpi"><div class="l">Background writes</div><div class="v" id="kBg">--</div></div>
+  <div class="card kpi"><div class="l">Throttle limit</div><div class="v" id="kLim">--</div></div>
+  <div class="card kpi"><div class="l">Critical reads</div><div class="v" id="kCrit">--</div></div>
+  <div class="card kpi"><div class="l">Elapsed</div><div class="v" id="kTime">--</div></div>
+</div>
+
+<div class="charts">
+  <div class="card"><h3>Temperature (&deg;C) &mdash; dashed lines: WARM 60, HOT 70</h3><canvas id="c1"></canvas></div>
+  <div class="card"><h3>Background write speed vs limit (MB/s)</h3><canvas id="c2"></canvas></div>
+  <div class="card"><h3>Critical workload read throughput (MB/s)</h3><canvas id="c3"></canvas></div>
+  
+  <!-- Comparative Strategy Evaluation Matrix -->
+  <div class="card">
+    <h3>Comprehensive Strategy Evaluation Matrix</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Baseline (No Control)</th>
+          <th style="color:var(--purple)">ThermalGuard Predictive (Ours)</th>
+          <th style="color:var(--amber)">Reactive (Legacy)</th>
+          <th style="color:var(--orange)">Rogue Test</th>
+        </tr>
+      </thead>
+      <tbody id="tbl">
+        <tr><td colspan="5" style="color:var(--mut)">Execute experiment runs above to populate comparative benchmark data.</td></tr>
+      </tbody>
+    </table>
+    <div class="note">Grey dashed line on the charts = reference run for visual comparison. Specialized deep-dive tests are available in the Rogue Binary Demo and Reactive Governor Lab above.</div>
+  </div>
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const COL={temp:'#ff6b6b',bg:'#4dabf7',lim:'#ffd43b',crit:'#51cf66',ref:'#8b93a7'};
+
+function drawChart(cv,series,o){
+  const dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;
+  const g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,w,h);
+  const L=48,R=12,T=18,B=24,pw=w-L-R,ph=h-T-B;
+  let ys=[];series.forEach(s=>s.data.forEach(p=>ys.push(p[1])));(o.hlines||[]).forEach(l=>ys.push(l.y));
+  const ymin=o.ymin||0,ymax=Math.max(o.ymaxMin||1,...(ys.length?ys:[1]))*1.08,xmax=Math.max(o.xmax||10,10);
+  const X=x=>L+x/xmax*pw,Y=y=>T+ph-(y-ymin)/(ymax-ymin)*ph;
+  g.font='11px system-ui';g.fillStyle='#8b93a7';g.strokeStyle='#252c3b';g.lineWidth=1;
+  for(let i=0;i<=4;i++){const v=ymin+(ymax-ymin)*i/4,y=Y(v);
+    g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();
+    g.textAlign='right';g.fillText(v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0),L-6,y+4);}
+  g.textAlign='center';
+  for(let i=0;i<=5;i++){const v=xmax*i/5;g.fillText(v.toFixed(0)+'s',X(v),h-6);}
+  (o.hlines||[]).forEach(l=>{g.strokeStyle=l.color;g.setLineDash([5,4]);g.beginPath();
+    g.moveTo(L,Y(l.y));g.lineTo(w-R,Y(l.y));g.stroke();g.setLineDash([]);});
+  series.forEach(s=>{if(!s.data.length)return;g.strokeStyle=s.color;g.lineWidth=2;
+    g.setLineDash(s.dash?[6,4]:[]);g.beginPath();
+    s.data.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1])));g.stroke();g.setLineDash([]);});
+  let lx=L+8;g.textAlign='left';
+  series.forEach(s=>{g.fillStyle=s.color;g.fillRect(lx,6,10,3);g.fillStyle='#8b93a7';
+    g.fillText(s.label,lx+14,11);lx+=g.measureText(s.label).width+34;});
+}
+
+// State tracker for animated classification pipeline
+let knownEventsCount = 0;
+let critCount = 0;
+let bgCount = 0;
+let animQueue = [];
+let isAnimating = false;
+
+function processAnimationQueue(){
+  if(isAnimating || animQueue.length === 0) return;
+  isAnimating = true;
+  const evt = animQueue.shift();
+
+  const slotIngest = $('slotIngest');
+  const slotFilter = $('slotFilter');
+  const boxCrit = $('boxCrit');
+  const boxBg = $('boxBg');
+  const stageIngest = $('stageIngest');
+  const stageFilter = $('stageFilter');
+  const stageCgroup = $('stageCgroup');
+
+  // Phase 1: Ingestion
+  $('pipelineStatus').textContent = `Detected process: PID ${evt.pid} (${evt.comm})`;
+  stageIngest.classList.add('active');
+  slotIngest.innerHTML = `
+    <div class="proc-token">
+      <div class="token-id"><span>PID ${evt.pid}</span><span style="font-size:11px;color:var(--mut)">New Process</span></div>
+      <div class="token-comm">${evt.comm}</div>
+      <div class="token-cmd" title="${evt.cmdline || evt.comm}">${evt.cmdline || evt.comm}</div>
+    </div>
+  `;
+
+  setTimeout(()=>{
+    // Phase 2: Flow into Classification Filter
+    stageIngest.classList.remove('active');
+    stageFilter.classList.add('active');
+    $('pipelineStatus').textContent = `Analyzing rules and I/O signature for PID ${evt.pid}...`;
+
+    if(evt.tier === 'unassigned'){
+      slotFilter.innerHTML = `
+        <div class="layer-skip">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Anti-Flapping Filter</div>
+          <div style="font-size:12px;margin-top:2px">&check; Transient burst (< 5MB)</div>
+          <div style="font-size:11px;color:var(--txt);margin-top:4px">Left unassigned (Safe)</div>
+        </div>
+      `;
+      setTimeout(()=>{
+        stageFilter.classList.remove('active');
+        $('pipelineStatus').textContent = `Transient burst for PID ${evt.pid} ignored. Anti-flapping active.`;
+        isAnimating = false;
+        processAnimationQueue();
+      }, 1000);
+      return;
+    }
+
+    if(evt.method === 'rule'){
+      slotFilter.innerHTML = `
+        <div class="layer-rule-hit">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Layer 1 &middot; Rule Match</div>
+          <div style="font-size:12px;margin-top:2px">&check; ${evt.detail || 'Matched rule pattern'}</div>
+          <div style="font-size:11px;color:var(--txt);margin-top:4px">Assigned: <b>${evt.tier}</b></div>
+        </div>
+      `;
+    } else {
+      slotFilter.innerHTML = `
+        <div class="layer-heur-hit">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Layer 2 &middot; Heuristic Quarantine</div>
+          <div style="font-size:12px;margin-top:2px">&check; ${evt.detail || 'I/O inspection'}</div>
+          <div style="font-size:11px;color:var(--txt);margin-top:4px">Quarantined: <b>${evt.tier}</b></div>
+        </div>
+      `;
+    }
+
+    setTimeout(()=>{
+      // Phase 3: Flow into Partition Target (Cgroups v2)
+      stageFilter.classList.remove('active');
+      stageCgroup.classList.add('active');
+      $('pipelineStatus').textContent = `Writing PID ${evt.pid} to /sys/fs/cgroup/tg/${evt.tier}/cgroup.procs`;
+
+      if(evt.tier === 'critical'){
+        critCount++;
+        $('cntCrit').textContent = critCount;
+        boxCrit.classList.add('active');
+        setTimeout(()=>boxCrit.classList.remove('active'), 1800);
+      } else {
+        bgCount++;
+        $('cntBg').textContent = bgCount;
+        boxBg.classList.add('active');
+        setTimeout(()=>boxBg.classList.remove('active'), 1800);
+      }
+
+      setTimeout(()=>{
+        stageCgroup.classList.remove('active');
+        $('pipelineStatus').textContent = `PID ${evt.pid} safely partitioned in ${evt.tier} cgroup.`;
+        isAnimating = false;
+        processAnimationQueue();
+      }, 1200);
+
+    }, 1100);
+
+  }, 1000);
+}
+
+function renderClassifier(d){
+  const dot = $('clfDot');
+  const evts = d.classifier_events || [];
+
+  dot.className = 'clf-dot ' + (d.classifier_active ? 'on' : 'off');
+  const badge = $('phaseBadge');
+  if(!d.classifier_active && evts.length === 0){
+    badge.textContent = 'READY';
+    badge.style.background = '#252c3b';
+    badge.style.color = 'var(--mut)';
+    $('pipelineStatus').textContent = 'Waiting for run to start...';
+  } else if(d.classifier_active && evts.length < 4){
+    badge.textContent = 'PHASE 1: AUTO-PARTITIONING';
+    badge.style.background = 'rgba(255,212,59,0.18)';
+    badge.style.color = 'var(--amber)';
+    $('pipelineStatus').textContent = `Discovering processes (${evts.length}/4) & inspecting signatures...`;
+  } else if(d.classifier_active && evts.length >= 4){
+    badge.textContent = 'PHASE 2: THERMALGUARD ACTIVE';
+    badge.style.background = 'rgba(81,207,102,0.18)';
+    badge.style.color = 'var(--green)';
+    $('pipelineStatus').textContent = 'Processes partitioned! ThermalGuard predictive throttling active.';
+  }
+
+  // Detect newly arrived events
+  if(evts.length > knownEventsCount){
+    for(let i = knownEventsCount; i < evts.length; i++){
+      animQueue.push(evts[i]);
+    }
+    knownEventsCount = evts.length;
+    processAnimationQueue();
+
+    // Update the live audit log
+    const stream = $('clfStream');
+    stream.innerHTML = evts.slice(-8).reverse().map(e => `
+      <div class="clf-stream-item">
+        <span style="color:var(--mut);min-width:44px">${e.t.toFixed(1)}s</span>
+        <span style="font-weight:700;color:var(--txt);min-width:70px">PID ${e.pid}</span>
+        <b style="color:var(--blue)">${e.comm}</b>
+        <span class="clf-badge ${e.tier}">${e.tier}</span>
+        <span style="color:var(--mut);font-size:11px">${e.detail || e.method}</span>
+      </div>
+    `).join('');
+  }
+}
+
+function render(d){
+  const rows=d.rows,last=rows.length?rows[rows.length-1]:null;
+  const warn=$('warn'),pr=[];
+  if(!d.is_root)pr.push('Dashboard is not running as root. Restart with: sudo python3 dashboard.py');
+  if(!d.setup_ok)pr.push('Test disk (/mnt/tg) or cgroups not found. Redo loop-disk and cgroups setup.');
+  warn.style.display=pr.length?'block':'none';warn.textContent=pr.join('  |  ');
+  
+  const anyRunning = d.running;
+  ['bClass','bRogue','bReact','bStatic','bBase'].forEach(id=>{
+    if($(id)) $(id).disabled = anyRunning || !d.setup_ok || !d.is_root;
+  });
+  $('bStop').disabled = !anyRunning;
+
+  const st=last?last.state:'IDLE';const kb=$('kState');kb.textContent=d.running||last?st:'IDLE';kb.className='badge '+(d.running||last?st:'IDLE');
+  $('kTemp').textContent=last?last.temp.toFixed(1)+' \u00b0C':'--';
+  $('kBg').textContent=last?last.bg.toFixed(0)+' MB/s':'--';
+  $('kLim').textContent=last?(last.limit>0?last.limit.toFixed(0)+' MB/s':'none'):'--';
+  $('kCrit').textContent=last?last.crit.toFixed(0)+' MB/s':'--';
+  $('kTime').textContent=d.mode?Math.min(d.elapsed,d.duration).toFixed(0)+' / '+d.duration+' s':'--';
+  $('prog').style.width=(d.running&&d.duration?Math.min(100,d.elapsed/d.duration*100):0)+'%';
+  
+  const map=(r,k,f)=>r.filter(x=>f?f(x):true).map(x=>[x.t,x[k]]);
+  const rl=d.ref_mode?d.ref_mode:'';
+  const lastT=Math.max(d.duration||0,rows.length?rows[rows.length-1].t:0,d.ref.length?d.ref[d.ref.length-1].t:0);
+  
+  drawChart($('c1'),[{data:map(d.ref,'temp'),color:COL.ref,dash:1,label:rl?rl+' (previous)':'previous'},
+    {data:map(rows,'temp'),color:COL.temp,label:d.mode||'current'}],
+    {xmax:lastT,ymin:25,ymaxMin:75,hlines:[{y:60,color:'#ffa94d'},{y:70,color:'#ff6b6b'}]});
+  drawChart($('c2'),[{data:map(d.ref,'bg'),color:COL.ref,dash:1,label:rl?rl+' (previous)':'previous'},
+    {data:map(rows,'bg'),color:COL.bg,label:'background MB/s'},
+    {data:map(rows,'limit',x=>x.limit>0),color:COL.lim,dash:1,label:'limit'}],{xmax:lastT,ymaxMin:100});
+  drawChart($('c3'),[{data:map(d.ref,'crit'),color:COL.ref,dash:1,label:rl?rl+' (previous)':'previous'},
+    {data:map(rows,'crit'),color:COL.crit,label:'critical MB/s'}],{xmax:lastT,ymaxMin:100});
+
+  // Populate Comparative Strategy Evaluation Matrix
+  const s = d.summaries || {};
+  const modes = ['baseline', 'guard', 'reactive', 'rogue'];
+  const hasAny = modes.some(m => s[m] !== null && s[m] !== undefined);
+  if(hasAny){
+    const getVal = (m, k, dec=1, unit='') => {
+      if(!s[m] || s[m][k] === undefined) return '--';
+      return s[m][k].toFixed(dec) + unit;
+    };
+    const getOvershoot = (m) => {
+      if(!s[m] || s[m].peak === undefined) return '--';
+      const diff = s[m].peak - 70.0;
+      if(diff <= 0) return '<span style="color:var(--green)">Zero (0.0&deg;C)</span>';
+      return `<span style="color:var(--red)">Yes (+${diff.toFixed(1)}&deg;C)</span>`;
+    };
+    const getStatus = (m) => {
+      if(!s[m]) return '--';
+      if(m === 'baseline') return '<span style="color:var(--red)">Unprotected (Thermal Cliff)</span>';
+      if(m === 'reactive') return '<span style="color:var(--amber)">Laggy (Oscillations)</span>';
+      if(m === 'guard') return '<span style="color:var(--green)">Optimal (Pareto Front)</span>';
+      if(m === 'rogue') return '<span style="color:var(--green)">Quarantined & Protected</span>';
+      return '--';
+    };
+
+    const rowsSpec = [
+      ['Peak Temperature', m => getVal(m, 'peak', 1, ' &deg;C')],
+      ['Thermal Overshoot', m => getOvershoot(m)],
+      ['Critical p99 Latency', m => getVal(m, 'p99_us', 1, ' &micro;s')],
+      ['Critical Read IOPS', m => getVal(m, 'iops', 0, '')],
+      ['Background Write Speed', m => getVal(m, 'bg_mbps', 0, ' MB/s')],
+      ['Workload SLA Status', m => getStatus(m)],
+    ];
+
+    $('tbl').innerHTML = rowsSpec.map(r => {
+      const cols = modes.map(m => `<td>${r[1](m)}</td>`).join('');
+      return `<tr><td><b>${r[0]}</b></td>${cols}</tr>`;
+    }).join('');
+  }
+
+  renderClassifier(d);
+}
+
+async function post(url){
+  try{
+    const r=await fetch(url,{method:'POST'});
+    const j=await r.json();
+    $('msg').textContent=j.message;
+  }catch(e){
+    $('msg').textContent='request failed';
+  }
+  poll();
+}
+
+function resetPipelineBeforeRun(){
+  knownEventsCount = 0;
+  critCount = 0;
+  bgCount = 0;
+  animQueue = [];
+  $('cntCrit').textContent = '0';
+  $('cntBg').textContent = '0';
+  $('clfStream').innerHTML = '<div style="color:var(--mut);font-style:italic">Starting execution...</div>';
+}
+
+if($('bClass')) $('bClass').onclick=()=>{
+  resetPipelineBeforeRun();
+  post('/api/start?mode=classified&duration='+$('dur').value);
+};
+if($('bBase')) $('bBase').onclick=()=>post('/api/start?mode=baseline&duration='+$('dur').value);
+if($('bStop')) $('bStop').onclick=()=>post('/api/stop');
+
+async function poll(){
+  try{render(await (await fetch('/api/data')).json());}
+  catch(e){$('msg').textContent='dashboard server not reachable';}
+}
+setInterval(poll,1000);poll();window.addEventListener('resize',poll);
+</script></body></html>

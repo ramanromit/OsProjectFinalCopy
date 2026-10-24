@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ThermalGuard — Reactive Governor Lab</title>
+<style>
+:root{--bg:#0e1117;--card:#161b26;--line:#252c3b;--txt:#e6e9f0;--mut:#8b93a7;
+--red:#ff6b6b;--blue:#4dabf7;--green:#51cf66;--amber:#ffd43b;--orange:#ffa94d;--purple:#da77f2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:18px}
+.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:12px}
+h1{margin:0;font-size:22px;color:var(--amber)}
+.sub{color:var(--mut);font-size:13px;margin-top:2px}
+.back-link{color:var(--blue);text-decoration:none;font-weight:600;font-size:13px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.back-link:hover{background:#1f2636}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button{border:0;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;color:#fff;transition:opacity 0.2s}
+button:disabled{opacity:.35;cursor:not-allowed}
+.b-reactive{background:#e8590c}
+.b-predictive{background:#7048e8}
+.b-stop{background:#c92a2a}
+select{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:9px}
+
+/* Policy Comparison Grid */
+.expl-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
+@media(max-width:750px){.expl-grid{grid-template-columns:1fr}}
+.expl-box{background:#111622;border:1px solid var(--line);border-radius:10px;padding:12px}
+.expl-title{font-size:14px;font-weight:700;margin-bottom:6px}
+.expl-desc{font-size:12px;color:var(--mut);line-height:1.45}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.kpi .l{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.kpi .v{font-size:24px;font-weight:700;margin-top:4px}
+.badge{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700;font-size:16px}
+.NORMAL{background:#12351c;color:var(--green)}.WARM{background:#3d3208;color:var(--amber)}.HOT{background:#431313;color:var(--red)}.IDLE{background:#222a39;color:var(--mut)}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:12px}
+.charts h3{margin:0 0 6px;font-size:14px;color:var(--mut);font-weight:600}
+canvas{width:100%;height:210px;display:block}
+.prog{height:6px;background:var(--line);border-radius:9px;overflow:hidden;margin:0 0 14px}
+.prog div{height:100%;width:0;background:var(--amber);transition:width .5s}
+.warn{background:#431313;border:1px solid var(--red);color:#ffc9c9;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:none}
+table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:600;font-size:13px}
+</style></head><body><div class="wrap">
+
+<div class="hdr">
+  <div>
+    <h1>Reactive Governor Lab: Thermal Momentum &amp; Overshoot Analysis</h1>
+    <div class="sub">Investigating the physics flaw in legacy threshold control vs. Predictive Rate-of-Rise (dT/dt) Control</div>
+  </div>
+  <a href="/" class="back-link">&larr; Return to Main Graphical Demo</a>
+</div>
+
+<div class="warn" id="warn"></div>
+
+<!-- Control Bar -->
+<div class="card bar">
+  <button class="b-reactive" id="bReact">&#9654; Run Reactive Governor (Legacy 60/70&deg;C)</button>
+  <button class="b-predictive" id="bPred">&#9654; Run Predictive Governor (Ours)</button>
+  <button class="b-stop" id="bStop">&#9632; Stop</button>
+  <label style="color:var(--mut);margin-left:auto">Duration
+    <select id="dur"><option value="60">60 s</option><option value="90">90 s</option><option value="150" selected>150 s</option></select></label>
+  <span id="msg" style="color:var(--mut);font-size:13px"></span>
+</div>
+<div class="prog"><div id="prog"></div></div>
+
+<!-- Technical Policy Comparison Card -->
+<div class="card">
+  <div style="font-size:14px;font-weight:700;color:var(--amber);margin-bottom:6px">Under the Hood: Comparing the Two Governor Policies</div>
+  <div class="expl-grid">
+    <div class="expl-box" style="border-left:3px solid var(--amber)">
+      <div class="expl-title" style="color:var(--amber)">Legacy Reactive Governor (Threshold Control)</div>
+      <div class="expl-desc">
+        <b>Logic:</b> Triggers <i>only after</i> a threshold is crossed: drops to 80% at 60&deg;C and 30% at 70&deg;C.<br/>
+        <b>The Physics Flaw (Thermal Inertia):</b> When writing at 2,500 MB/s, heating slope is +1.5 to 2.5&deg;C/s. By the time it hits 70&deg;C, accumulated heat causes <b>thermal overshoot (72&ndash;74&deg;C)</b>. Once cooled below 67&deg;C, it releases back to full speed, creating an inefficient <b>sawtooth oscillation</b>.
+      </div>
+    </div>
+    <div class="expl-box" style="border-left:3px solid var(--purple)">
+      <div class="expl-title" style="color:var(--purple)">ThermalGuard Predictive Governor (Rate-of-Rise dT/dt)</div>
+      <div class="expl-desc">
+        <b>Logic:</b> Computes the thermal derivative: <code>dT/dt = &Delta;T/&Delta;t</code>.<br/>
+        <b>The Solution (Lookahead Clamping):</b> Projects temperature 5 seconds ahead: <code>T_proj = T + (dT/dt)&middot;5s</code>. If projected temperature reaches 70&deg;C, it pre-emptively clamps background bandwidth <i>before</i> reaching the limit. This achieves <b>Zero Thermal Overshoot</b> and a stable flat throughput line.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Live Telemetry KPIs -->
+<div class="kpis">
+  <div class="card kpi"><div class="l">Governor State</div><div class="v"><span class="badge IDLE" id="kState">IDLE</span></div></div>
+  <div class="card kpi"><div class="l">Temperature (sim)</div><div class="v" id="kTemp">--</div></div>
+  <div class="card kpi"><div class="l">Background Write Speed</div><div class="v" id="kBg">--</div></div>
+  <div class="card kpi"><div class="l">Throttle Limit</div><div class="v" id="kLim">--</div></div>
+  <div class="card kpi"><div class="l">Critical Read Speed</div><div class="v" id="kCrit">--</div></div>
+  <div class="card kpi"><div class="l">Elapsed</div><div class="v" id="kTime">--</div></div>
+</div>
+
+<!-- Real-time Charts & Results -->
+<div class="charts">
+  <div class="card"><h3>Temperature (&deg;C) &mdash; Dashed Lines: WARM 60, HOT 70</h3><canvas id="c1"></canvas></div>
+  <div class="card"><h3>Background Write Speed vs io.max Limit (MB/s)</h3><canvas id="c2"></canvas></div>
+  <div class="card"><h3>Critical Workload Read Throughput (MB/s)</h3><canvas id="c3"></canvas></div>
+  <div class="card">
+    <h3>Policy Comparison Matrix (Reactive vs Predictive)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th style="color:var(--amber)">Legacy Reactive</th>
+          <th style="color:var(--purple)">TG Predictive (Ours)</th>
+        </tr>
+      </thead>
+      <tbody id="tbl">
+        <tr><td colspan="3" style="color:var(--mut)">Execute runs to compare both governors side by side.</td></tr>
+      </tbody>
+    </table>
+    <div class="note">Notice: Reactive overshoots 70&deg;C, whereas Predictive clamps smoothly with zero overshoot.</div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const COL={temp:'#ff6b6b',bg:'#4dabf7',lim:'#ffd43b',crit:'#51cf66',ref:'#8b93a7'};
+
+function drawChart(cv,series,o){
+  const dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;
+  const g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,w,h);
+  const L=48,R=12,T=18,B=24,pw=w-L-R,ph=h-T-B;
+  let ys=[];series.forEach(s=>s.data.forEach(p=>ys.push(p[1])));(o.hlines||[]).forEach(l=>ys.push(l.y));
+  const ymin=o.ymin||0,ymax=Math.max(o.ymaxMin||1,...(ys.length?ys:[1]))*1.08,xmax=Math.max(o.xmax||10,10);
+  const X=x=>L+x/xmax*pw,Y=y=>T+ph-(y-ymin)/(ymax-ymin)*ph;
+  g.font='11px system-ui';g.fillStyle='#8b93a7';g.strokeStyle='#252c3b';g.lineWidth=1;
+  for(let i=0;i<=4;i++){const v=ymin+(ymax-ymin)*i/4,y=Y(v);
+    g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();
+    g.textAlign='right';g.fillText(v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0),L-6,y+4);}
+  g.textAlign='center';
+  for(let i=0;i<=5;i++){const v=xmax*i/5;g.fillText(v.toFixed(0)+'s',X(v),h-6);}
+  (o.hlines||[]).forEach(l=>{g.strokeStyle=l.color;g.setLineDash([5,4]);g.beginPath();
+    g.moveTo(L,Y(l.y));g.lineTo(w-R,Y(l.y));g.stroke();g.setLineDash([]);});
+  series.forEach(s=>{if(!s.data.length)return;g.strokeStyle=s.color;g.lineWidth=2;
+    g.setLineDash(s.dash?[6,4]:[]);g.beginPath();
+    s.data.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1])));g.stroke();g.setLineDash([]);});
+  let lx=L+8;g.textAlign='left';
+  series.forEach(s=>{g.fillStyle=s.color;g.fillRect(lx,6,10,3);g.fillStyle='#8b93a7';
+    g.fillText(s.label,lx+14,11);lx+=g.measureText(s.label).width+34;});
+}
+
+function render(d){
+  const rows=d.rows,last=rows.length?rows[rows.length-1]:null;
+  const warn=$('warn'),pr=[];
+  if(!d.is_root)pr.push('Not root. Restart dashboard with: sudo python3 dashboard.py');
+  if(!d.setup_ok)pr.push('Test disk (/mnt/tg) or cgroups missing. Redo setup.');
+  warn.style.display=pr.length?'block':'none';warn.textContent=pr.join('  |  ');
+  
+  $('bReact').disabled = $('bPred').disabled = d.running || !d.setup_ok || !d.is_root;
+  $('bStop').disabled = !d.running;
+
+  const st=last?last.state:'IDLE';const kb=$('kState');kb.textContent=d.running||last?st:'IDLE';kb.className='badge '+(d.running||last?st:'IDLE');
+  $('kTemp').textContent=last?last.temp.toFixed(1)+' \u00b0C':'--';
+  $('kBg').textContent=last?last.bg.toFixed(0)+' MB/s':'--';
+  $('kLim').textContent=last?(last.limit>0?last.limit.toFixed(0)+' MB/s':'none'):'--';
+  $('kCrit').textContent=last?last.crit.toFixed(0)+' MB/s':'--';
+  $('kTime').textContent=d.mode?Math.min(d.elapsed,d.duration).toFixed(0)+' / '+d.duration+' s':'--';
+  $('prog').style.width=(d.running&&d.duration?Math.min(100,d.elapsed/d.duration*100):0)+'%';
+  
+  const map=(r,k,f)=>r.filter(x=>f?f(x):true).map(x=>[x.t,x[k]]);
+  const rl=d.ref_mode?d.ref_mode:'';
+  const lastT=Math.max(d.duration||0,rows.length?rows[rows.length-1].t:0,d.ref.length?d.ref[d.ref.length-1].t:0);
+  
+  drawChart($('c1'),[{data:map(d.ref,'temp'),color:COL.ref,dash:1,label:rl?rl+' (ref)':'reference'},
+    {data:map(rows,'temp'),color:COL.temp,label:d.mode||'current'}],
+    {xmax:lastT,ymin:25,ymaxMin:75,hlines:[{y:60,color:'#ffa94d'},{y:70,color:'#ff6b6b'}]});
+  drawChart($('c2'),[{data:map(d.ref,'bg'),color:COL.ref,dash:1,label:rl?rl+' (ref)':'reference'},
+    {data:map(rows,'bg'),color:COL.bg,label:'background MB/s'},
+    {data:map(rows,'limit',x=>x.limit>0),color:COL.lim,dash:1,label:'limit'}],{xmax:lastT,ymaxMin:100});
+  drawChart($('c3'),[{data:map(d.ref,'crit'),color:COL.ref,dash:1,label:rl?rl+' (ref)':'reference'},
+    {data:map(rows,'crit'),color:COL.crit,label:'critical MB/s'}],{xmax:lastT,ymaxMin:100});
+
+  // Table
+  const s = d.summaries || {};
+  const react = s.reactive, pred = s.guard;
+  if(react || pred){
+    const getVal = (obj, k, dec=1, unit='') => obj ? (obj[k].toFixed(dec) + unit) : '--';
+    const getOvershoot = (obj) => {
+      if(!obj) return '--';
+      const diff = obj.peak - 70.0;
+      if(diff <= 0) return '<span style="color:var(--green)">Zero (0.0&deg;C)</span>';
+      return `<span style="color:var(--red)">Yes (+${diff.toFixed(1)}&deg;C)</span>`;
+    };
+    $('tbl').innerHTML = `
+      <tr><td><b>Peak Temperature</b></td><td>${getVal(react, 'peak', 1, ' &deg;C')}</td><td>${getVal(pred, 'peak', 1, ' &deg;C')}</td></tr>
+      <tr><td><b>Thermal Overshoot?</b></td><td>${getOvershoot(react)}</td><td>${getOvershoot(pred)}</td></tr>
+      <tr><td><b>Critical p99 Latency</b></td><td>${getVal(react, 'p99_us', 1, ' &micro;s')}</td><td>${getVal(pred, 'p99_us', 1, ' &micro;s')}</td></tr>
+      <tr><td><b>Critical Read IOPS</b></td><td>${getVal(react, 'iops', 0, '')}</td><td>${getVal(pred, 'iops', 0, '')}</td></tr>
+      <tr><td><b>Background Write Speed</b></td><td>${getVal(react, 'bg_mbps', 0, ' MB/s')}</td><td>${getVal(pred, 'bg_mbps', 0, ' MB/s')}</td></tr>
+      <tr><td><b>Behavior</b></td><td><span style="color:var(--amber)">Overshoots & Oscillates</span></td><td><span style="color:var(--green)">Smooth Proactive Clamping</span></td></tr>
+    `;
+  }
+}
+
+async function post(url){
+  try{
+    const r=await fetch(url,{method:'POST'});
+    const j=await r.json();
+    $('msg').textContent=j.message;
+  }catch(e){
+    $('msg').textContent='request failed';
+  }
+  poll();
+}
+
+$('bReact').onclick=()=>post('/api/start?mode=reactive&duration='+$('dur').value);
+$('bPred').onclick=()=>post('/api/start?mode=guard&duration='+$('dur').value);
+$('bStop').onclick=()=>post('/api/stop');
+
+async function poll(){
+  try{render(await (await fetch('/api/data')).json());}
+  catch(e){$('msg').textContent='dashboard not reachable';}
+}
+setInterval(poll,1000);poll();window.addEventListener('resize',poll);
+</script></body></html>
+

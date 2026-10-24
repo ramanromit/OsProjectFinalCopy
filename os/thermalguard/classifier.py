@@ -72,11 +72,11 @@ class Classifier:
         self.cg_names   = {"critical": cfg["critical"], "background": cfg["background"]}
         self.dry_run    = dry_run
         self.known_pids = set()         # PIDs we have already classified
-        self.scan_interval = cfg.get("classifier", {}).get("scan_interval", 2.0)
+        self.scan_interval = cfg.get("classifier", {}).get("scan_interval", 0.8)
 
-        # Build compiled rule list
+        # Build compiled rule list with prefix word boundaries
         raw_rules = cfg.get("classifier", {}).get("rules", DEFAULT_RULES)
-        self.rules = [(re.compile(r["pattern"], re.IGNORECASE), r["tier"]) for r in raw_rules]
+        self.rules = [(re.compile(r"\b" + r["pattern"], re.IGNORECASE), r["tier"]) for r in raw_rules]
 
         # Default tier for processes the heuristic can't decide on
         self.default_tier = cfg.get("classifier", {}).get("default_tier", "background")
@@ -136,14 +136,14 @@ class Classifier:
     # ------------------------------------------------------------------
     def classify_by_rules(self, pid):
         """Try to match the process name/cmdline against the rule list.
-        Returns 'critical', 'background', or None (no match)."""
+        Returns ('critical'|'background', matched_pattern) or (None, None)."""
         comm = self._read_comm(pid)
         cmdline = self._read_cmdline(pid)
         text = f"{comm} {cmdline}"
         for regex, tier in self.rules:
             if regex.search(text):
-                return tier
-        return None
+                return tier, regex.pattern
+        return None, None
 
     # ------------------------------------------------------------------
     # 3. Heuristic classification (observe I/O pattern)
@@ -159,40 +159,39 @@ class Classifier:
         """
         io1 = self._read_io(pid)
         if io1 is None:
-            return self.default_tier
+            return self.default_tier, "no_io_counters"
 
         time.sleep(OBSERVE_SECONDS)
 
         io2 = self._read_io(pid)
         if io2 is None:
-            return self.default_tier
+            return self.default_tier, "no_io_counters"
 
         dr = io2["read_bytes"]  - io1["read_bytes"]
         dw = io2["write_bytes"] - io1["write_bytes"]
         dsc_r = io2["syscr"]    - io1["syscr"]
 
         total = dr + dw
-        if total == 0:
-            return self.default_tier       # process isn't doing I/O
+        if total < 5000000:       # Anti-flapping: < 5MB active I/O over window is considered transient
+            return None, f"transient_burst_ignored ({total/1e6:.1f}MB)"
 
         write_ratio = dw / total
         read_syscall_rate = dsc_r / OBSERVE_SECONDS
 
         if write_ratio > WRITE_RATIO_THRESH:
-            reason = f"write_ratio={write_ratio:.0%}"
+            reason = f"write_ratio={write_ratio:.0%} (sustained bulk writer quarantined)"
             tier = "background"
         elif read_syscall_rate > SYSCALL_RATE_THRESH:
-            reason = f"read_syscalls={read_syscall_rate:.0f}/s"
+            reason = f"read_syscalls={read_syscall_rate:.0f}/s (interactive reads protected)"
             tier = "critical"
         elif dr > dw:
-            reason = f"read_dominant (r={dr} w={dw})"
+            reason = f"read_dominant (r={dr/1e6:.1f}MB w={dw/1e6:.1f}MB)"
             tier = "critical"
         else:
             reason = "ambiguous, using default"
             tier = self.default_tier
 
-        self._log(pid, tier, f"heuristic: {reason}")
-        return tier
+        return tier, reason
 
     # ------------------------------------------------------------------
     # 4. Assign a PID to a cgroup
@@ -225,16 +224,21 @@ class Classifier:
             return
 
         # Layer 1: rule-based
-        tier = self.classify_by_rules(pid)
+        tier, pattern = self.classify_by_rules(pid)
         method = "rule"
+        detail = f"rule:{pattern}" if pattern else ""
 
         # Layer 2: heuristic fallback
         if tier is None:
-            tier = self.classify_by_heuristic(pid)
+            tier, heuristic_reason = self.classify_by_heuristic(pid)
             method = "heuristic"
+            detail = heuristic_reason
 
-        self._log(pid, tier, f"{method} match | comm={comm}")
-        self.assign(pid, tier)
+        if tier is not None:
+            self._log(pid, tier, f"{method} | {detail} | comm={comm}", method=method, detail=detail)
+            self.assign(pid, tier)
+        else:
+            self._log(pid, "unassigned", f"anti-flapping | {detail} | comm={comm}", method=method, detail=detail)
 
     # ------------------------------------------------------------------
     # 6. Scanner – find new processes doing I/O on our device
@@ -299,9 +303,17 @@ class Classifier:
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
-    def _log(self, pid, tier, msg):
-        entry = {"ts": time.time(), "pid": pid, "tier": tier, "msg": msg,
-                 "comm": self._read_comm(pid) or "?"}
+    def _log(self, pid, tier, msg, method="rule", detail=""):
+        entry = {
+            "ts": time.time(),
+            "pid": pid,
+            "tier": tier,
+            "msg": msg,
+            "comm": self._read_comm(pid) or "?",
+            "cmdline": self._read_cmdline(pid) or "",
+            "method": method,
+            "detail": detail
+        }
         self.log.append(entry)
         print(f"[classifier] PID {pid:>6} → {tier:<12} {msg}")
 

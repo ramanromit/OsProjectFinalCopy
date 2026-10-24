@@ -69,14 +69,14 @@ def release_limit():
 
 
 def start_run(mode, duration):
-    if mode not in ("baseline", "guard", "classified"):
+    valid_modes = ("baseline", "guard", "classified", "reactive", "static", "rogue")
+    if mode not in valid_modes:
         return False, "Invalid mode"
 
     if STATE["proc"] and STATE["proc"].poll() is None:
         return False, "A run is already in progress"
 
     # For results, "classified" stores its data under the "guard" key
-    # so the comparison table works (classified IS guard + auto-classification)
     result_key = "guard" if mode == "classified" else mode
 
     for suffix in (".csv", ".json"):
@@ -90,28 +90,31 @@ def start_run(mode, duration):
     print(f"\nStarting ThermalGuard {mode.upper()} run ({duration}s)", flush=True)
     print(f"Saving logs to {log_path}\n", flush=True)
 
-    # Start the classifier for "classified" mode
-    if mode == "classified" and CFG:
+    # Start the classifier for "classified" or "rogue" mode
+    if mode in ("classified", "rogue") and CFG:
         clf = Classifier(CFG)
         clf.reset()
         CLASSIFIER_STATE["instance"] = clf
         CLASSIFIER_STATE["thread"] = clf.run_background()
         CLASSIFIER_STATE["active"] = True
-        print("Classifier thread started — will auto-assign processes", flush=True)
+        print("Classifier thread started — will auto-assign / quarantine processes", flush=True)
     else:
         CLASSIFIER_STATE["active"] = False
 
     # Pick the right experiment script
     if mode == "classified":
         script = os.path.join(ROOT, "scripts", "run_auto_experiment.sh")
-        script_mode = "guard"   # ThermalGuard throttling is ON
+        cmd = ["bash", script, "guard", str(duration)]
+    elif mode == "rogue":
+        script = os.path.join(ROOT, "scripts", "run_rogue_experiment.sh")
+        cmd = ["bash", script, str(duration)]
     else:
         script = os.path.join(ROOT, "scripts", "run_experiment.sh")
-        script_mode = mode
+        cmd = ["bash", script, mode, str(duration)]
 
     try:
         proc = subprocess.Popen(
-            ["bash", script, script_mode, str(duration)],
+            cmd,
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -198,8 +201,13 @@ def api_data():
         for e in clf.log:
             clf_events.append({
                 "t": round(e["ts"] - start_t, 1) if start_t else 0,
-                "pid": e["pid"], "comm": e["comm"],
-                "tier": e["tier"], "msg": e["msg"],
+                "pid": e["pid"],
+                "comm": e["comm"],
+                "cmdline": e.get("cmdline", ""),
+                "tier": e["tier"],
+                "method": e.get("method", "rule"),
+                "detail": e.get("detail", ""),
+                "msg": e["msg"],
             })
 
     return {
@@ -208,7 +216,13 @@ def api_data():
         "is_root": os.geteuid() == 0,
         "rows": read_rows(mode) if mode else [],
         "ref_mode": ref_mode, "ref": read_rows(ref_mode) if ref_mode else [],
-        "summaries": {"baseline": summary("baseline"), "guard": summary("guard")},
+        "summaries": {
+            "baseline": summary("baseline"),
+            "static": summary("static"),
+            "reactive": summary("reactive"),
+            "guard": summary("guard"),
+            "rogue": summary("rogue"),
+        },
         "classifier_active": CLASSIFIER_STATE["active"],
         "classifier_events": clf_events,
     }
@@ -231,7 +245,23 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/":
-            self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+            p = os.path.join(ROOT, "dashboard_page.html")
+            if os.path.exists(p):
+                self._send(200, open(p, "rb").read(), "text/html; charset=utf-8")
+            else:
+                self._send(404, {"error": "dashboard_page.html not found"})
+        elif path == "/demo-rogue":
+            p = os.path.join(ROOT, "demo_rogue.html")
+            if os.path.exists(p):
+                self._send(200, open(p, "rb").read(), "text/html; charset=utf-8")
+            else:
+                self._send(404, {"error": "demo_rogue.html not found"})
+        elif path == "/demo-reactive":
+            p = os.path.join(ROOT, "demo_reactive.html")
+            if os.path.exists(p):
+                self._send(200, open(p, "rb").read(), "text/html; charset=utf-8")
+            else:
+                self._send(404, {"error": "demo_reactive.html not found"})
         elif path == "/animation":
             anim_path = os.path.join(ROOT, "pipeline_animation.html")
             if os.path.exists(anim_path):
@@ -259,186 +289,11 @@ class H(BaseHTTPRequestHandler):
         self._send(code, {"message": msg})
 
 
-PAGE = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ThermalGuard Dashboard</title>
-<style>
-:root{--bg:#0e1117;--card:#161b26;--line:#252c3b;--txt:#e6e9f0;--mut:#8b93a7;
---red:#ff6b6b;--blue:#4dabf7;--green:#51cf66;--amber:#ffd43b;--orange:#ffa94d;--purple:#da77f2}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:1150px;margin:0 auto;padding:18px}
-h1{margin:0;font-size:24px}.sub{color:var(--mut);margin:2px 0 16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
-.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
-button{border:0;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;color:#fff}
-button:disabled{opacity:.4;cursor:not-allowed}
-.b1{background:#2f9e44}.b2{background:#3b5bdb}.b3{background:#c92a2a}.b4{background:#7048e8}
-select{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:9px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
-.kpi .l{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
-.kpi .v{font-size:26px;font-weight:700;margin-top:4px}
-.badge{display:inline-block;padding:3px 12px;border-radius:99px;font-weight:700;font-size:18px}
-.NORMAL{background:#12351c;color:var(--green)}.WARM{background:#3d3208;color:var(--amber)}
-.HOT{background:#431313;color:var(--red)}.IDLE{background:#222a39;color:var(--mut)}
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:12px}
-.charts h3{margin:0 0 6px;font-size:14px;color:var(--mut);font-weight:600}
-canvas{width:100%;height:220px;display:block}
-.prog{height:6px;background:var(--line);border-radius:9px;overflow:hidden;margin:0 0 14px}
-.prog div{height:100%;width:0;background:var(--blue);transition:width .5s}
-.warn{background:#431313;border:1px solid var(--red);color:#ffc9c9;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:none}
-table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
-th{color:var(--mut);font-weight:600;font-size:13px}.note{color:var(--mut);font-size:13px;margin-top:8px}
-.clf-panel{margin-bottom:14px}
-.clf-panel h3{margin:0 0 8px;font-size:14px;color:var(--purple);font-weight:600;display:flex;align-items:center;gap:8px}
-.clf-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-.clf-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}.clf-dot.off{background:var(--mut)}
-.clf-row{display:flex;gap:12px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;align-items:center}
-.clf-row:last-child{border:0}
-.clf-tier{padding:2px 10px;border-radius:99px;font-weight:700;font-size:12px}
-.clf-tier.critical{background:#12351c;color:var(--green)}.clf-tier.background{background:#1a1a3e;color:var(--blue)}
-.clf-method{color:var(--mut);font-size:12px}
-.clf-empty{color:var(--mut);font-style:italic;padding:10px 0}
-</style></head><body><div class="wrap">
-<h1>ThermalGuard</h1>
-<div class="sub">Workload-aware NVMe I/O throttling with cgroups v2 &middot; temperature is <b>simulated</b> &middot; test disk is a RAM-backed loop device</div>
-<div class="warn" id="warn"></div>
-<div class="card bar">
-  <button class="b1" id="bGuard">&#9654; ThermalGuard (manual cgroups)</button>
-  <button class="b4" id="bClass">&#9654; ThermalGuard (auto-classified)</button>
-  <button class="b2" id="bBase">&#9654; Baseline (no control)</button>
-  <button class="b3" id="bStop">&#9632; Stop</button>
-  <label style="color:var(--mut)">Duration
-    <select id="dur"><option value="60">60 s</option><option value="90">90 s</option>
-    <option value="150" selected>150 s</option></select></label>
-  <span id="msg" style="color:var(--mut)"></span>
-</div>
-<div class="prog"><div id="prog"></div></div>
-
-<div class="card clf-panel" id="clfPanel" style="display:none">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <h3><span class="clf-dot off" id="clfDot"></span> Auto-Classifier</h3>
-    <a href="/animation" target="_blank" style="color:var(--blue);font-size:12px;text-decoration:none;font-weight:600">Open Interactive Animation ↗</a>
-  </div>
-  <div id="clfLog"><div class="clf-empty">Classifier will detect and assign processes when a classified run starts.</div></div>
-</div>
-
-<div class="kpis">
-  <div class="card kpi"><div class="l">State</div><div class="v"><span class="badge IDLE" id="kState">IDLE</span></div></div>
-  <div class="card kpi"><div class="l">Temperature (sim)</div><div class="v" id="kTemp">--</div></div>
-  <div class="card kpi"><div class="l">Background writes</div><div class="v" id="kBg">--</div></div>
-  <div class="card kpi"><div class="l">Throttle limit</div><div class="v" id="kLim">--</div></div>
-  <div class="card kpi"><div class="l">Critical reads</div><div class="v" id="kCrit">--</div></div>
-  <div class="card kpi"><div class="l">Elapsed</div><div class="v" id="kTime">--</div></div>
-</div>
-<div class="charts">
-  <div class="card"><h3>Temperature (&deg;C) &mdash; dashed lines: WARM 60, HOT 70</h3><canvas id="c1"></canvas></div>
-  <div class="card"><h3>Background write speed vs limit (MB/s)</h3><canvas id="c2"></canvas></div>
-  <div class="card"><h3>Critical workload read throughput (MB/s)</h3><canvas id="c3"></canvas></div>
-  <div class="card"><h3>Results of completed runs</h3>
-    <table><thead><tr><th>Metric</th><th>Baseline</th><th>ThermalGuard</th></tr></thead>
-    <tbody id="tbl"><tr><td colspan="3" style="color:var(--mut)">Run baseline and guard to fill this table.</td></tr></tbody></table>
-    <div class="note">Grey dashed line on the charts = the other mode's last run, for comparison.</div></div>
-</div>
-</div>
-<script>
-const $=id=>document.getElementById(id);
-const COL={temp:'#ff6b6b',bg:'#4dabf7',lim:'#ffd43b',crit:'#51cf66',ref:'#8b93a7'};
-
-function drawChart(cv,series,o){
-  const dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
-  cv.width=w*dpr;cv.height=h*dpr;
-  const g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,w,h);
-  const L=48,R=12,T=18,B=24,pw=w-L-R,ph=h-T-B;
-  let ys=[];series.forEach(s=>s.data.forEach(p=>ys.push(p[1])));(o.hlines||[]).forEach(l=>ys.push(l.y));
-  const ymin=o.ymin||0,ymax=Math.max(o.ymaxMin||1,...(ys.length?ys:[1]))*1.08,xmax=Math.max(o.xmax||10,10);
-  const X=x=>L+x/xmax*pw,Y=y=>T+ph-(y-ymin)/(ymax-ymin)*ph;
-  g.font='11px system-ui';g.fillStyle='#8b93a7';g.strokeStyle='#252c3b';g.lineWidth=1;
-  for(let i=0;i<=4;i++){const v=ymin+(ymax-ymin)*i/4,y=Y(v);
-    g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();
-    g.textAlign='right';g.fillText(v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0),L-6,y+4);}
-  g.textAlign='center';
-  for(let i=0;i<=5;i++){const v=xmax*i/5;g.fillText(v.toFixed(0)+'s',X(v),h-6);}
-  (o.hlines||[]).forEach(l=>{g.strokeStyle=l.color;g.setLineDash([5,4]);g.beginPath();
-    g.moveTo(L,Y(l.y));g.lineTo(w-R,Y(l.y));g.stroke();g.setLineDash([]);});
-  series.forEach(s=>{if(!s.data.length)return;g.strokeStyle=s.color;g.lineWidth=2;
-    g.setLineDash(s.dash?[6,4]:[]);g.beginPath();
-    s.data.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1])));g.stroke();g.setLineDash([]);});
-  let lx=L+8;g.textAlign='left';
-  series.forEach(s=>{g.fillStyle=s.color;g.fillRect(lx,6,10,3);g.fillStyle='#8b93a7';
-    g.fillText(s.label,lx+14,11);lx+=g.measureText(s.label).width+34;});
-}
-
-function renderClassifier(d){
-  const panel=$('clfPanel'), dot=$('clfDot'), log=$('clfLog');
-  const evts=d.classifier_events||[];
-  const show=d.classifier_active||evts.length>0;
-  panel.style.display=show?'block':'none';
-  dot.className='clf-dot '+(d.classifier_active?'on':'off');
-  if(!evts.length){
-    log.innerHTML='<div class="clf-empty">Classifier is scanning for new processes\u2026</div>';
-    return;
-  }
-  log.innerHTML=evts.map(e=>{
-    const parts=e.msg.split('|').map(s=>s.trim());
-    const method=parts[0]||'';
-    return '<div class="clf-row">'
-      +'<span style="color:var(--mut);min-width:48px">'+e.t.toFixed(1)+'s</span>'
-      +'<span style="min-width:70px">PID '+e.pid+'</span>'
-      +'<b>'+e.comm+'</b>'
-      +'<span class="clf-tier '+e.tier+'">'+e.tier+'</span>'
-      +'<span class="clf-method">'+method+'</span>'
-      +'</div>';
-  }).join('');
-}
-
-function render(d){
-  const rows=d.rows,last=rows.length?rows[rows.length-1]:null;
-  const warn=$('warn'),pr=[];
-  if(!d.is_root)pr.push('Dashboard is not running as root. Restart with: sudo python3 dashboard.py');
-  if(!d.setup_ok)pr.push('Test disk (/mnt/tg) or cgroups not found. Redo the loop-disk and cgroup setup steps.');
-  warn.style.display=pr.length?'block':'none';warn.textContent=pr.join('  |  ');
-  $('bGuard').disabled=$('bBase').disabled=$('bClass').disabled=d.running||!d.setup_ok||!d.is_root;$('bStop').disabled=!d.running;
-  const st=last?last.state:'IDLE';const kb=$('kState');kb.textContent=d.running||last?st:'IDLE';kb.className='badge '+(d.running||last?st:'IDLE');
-  $('kTemp').textContent=last?last.temp.toFixed(1)+' \u00b0C':'--';
-  $('kBg').textContent=last?last.bg.toFixed(0)+' MB/s':'--';
-  $('kLim').textContent=last?(last.limit>0?last.limit.toFixed(0)+' MB/s':'none'):'--';
-  $('kCrit').textContent=last?last.crit.toFixed(0)+' MB/s':'--';
-  $('kTime').textContent=d.mode?Math.min(d.elapsed,d.duration).toFixed(0)+' / '+d.duration+' s':'--';
-  $('prog').style.width=(d.running&&d.duration?Math.min(100,d.elapsed/d.duration*100):0)+'%';
-  const map=(r,k,f)=>r.filter(x=>f?f(x):true).map(x=>[x.t,x[k]]);
-  const rl=d.ref_mode?d.ref_mode:'';
-  const lastT=Math.max(d.duration||0,rows.length?rows[rows.length-1].t:0,d.ref.length?d.ref[d.ref.length-1].t:0);
-  drawChart($('c1'),[{data:map(d.ref,'temp'),color:COL.ref,dash:1,label:rl?rl+' (previous)':'previous'},
-    {data:map(rows,'temp'),color:COL.temp,label:d.mode||'current'}],
-    {xmax:lastT,ymin:25,ymaxMin:75,hlines:[{y:60,color:'#ffa94d'},{y:70,color:'#ff6b6b'}]});
-  drawChart($('c2'),[{data:map(d.ref,'bg'),color:COL.ref,dash:1,label:rl?rl+' (previous)':'previous'},
-    {data:map(rows,'bg'),color:COL.bg,label:'background MB/s'},
-    {data:map(rows,'limit',x=>x.limit>0),color:COL.lim,dash:1,label:'limit'}],{xmax:lastT,ymaxMin:100});
-  drawChart($('c3'),[{data:map(d.ref,'crit'),color:COL.ref,dash:1,label:rl?rl+' (previous)':'previous'},
-    {data:map(rows,'crit'),color:COL.crit,label:'critical MB/s'}],{xmax:lastT,ymaxMin:100});
-  const b=d.summaries.baseline,gd=d.summaries.guard;
-  if(b||gd){const f=(s,k,n,u)=>s?s[k].toFixed(n)+u:'--';
-    const spec=[['Peak temperature (sim)','peak',1,' \u00b0C'],['Critical p99 latency','p99_us',1,' \u00b5s'],
-      ['Critical read IOPS','iops',0,''],['Background write speed','bg_mbps',0,' MB/s']];
-    $('tbl').innerHTML=spec.map(r=>'<tr><td>'+r[0]+'</td><td>'+f(b,r[1],r[2],r[3])+'</td><td>'+f(gd,r[1],r[2],r[3])+'</td></tr>').join('');}
-  renderClassifier(d);
-}
-async function post(url){
-  try{const r=await fetch(url,{method:'POST'});const j=await r.json();$('msg').textContent=j.message;}
-  catch(e){$('msg').textContent='request failed';}
-  poll();
-}
-$('bGuard').onclick=()=>post('/api/start?mode=guard&duration='+$('dur').value);
-$('bClass').onclick=()=>post('/api/start?mode=classified&duration='+$('dur').value);
-$('bBase').onclick=()=>post('/api/start?mode=baseline&duration='+$('dur').value);
-$('bStop').onclick=()=>post('/api/stop');
-async function poll(){try{render(await (await fetch('/api/data')).json());}
-  catch(e){$('msg').textContent='dashboard server not reachable';}}
-setInterval(poll,1000);poll();window.addEventListener('resize',poll);
-</script></body></html>
-"""
+PAGE_FILE = os.path.join(ROOT, "dashboard_page.html")
+if os.path.exists(PAGE_FILE):
+    PAGE = open(PAGE_FILE, "r", encoding="utf-8").read()
+else:
+    PAGE = "<h1>dashboard_page.html not found</h1>"
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
